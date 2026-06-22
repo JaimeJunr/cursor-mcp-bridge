@@ -1,6 +1,6 @@
 {
   "name": "cursor-mcp-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server that lets any agent delegate to the Cursor CLI agent (agent -p) — cheap/fast delegation, project discovery, and analysis with model and effort control.",
   "type": "module",
   "bin": {

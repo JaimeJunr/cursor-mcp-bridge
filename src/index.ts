@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { runCursor, type CliResult } from "./cli.js";
 
-const server = new McpServer({ name: "cursor-mcp-bridge", version: "0.1.0" });
+const server = new McpServer({ name: "cursor-mcp-bridge", version: "0.2.0" });
 
 // Params de roteamento compartilhados.
 const routing = {
@@ -37,41 +37,37 @@ server.registerTool(
 );
 
 server.registerTool(
-  "discovery",
+  "explore",
   {
     description:
-      "Map and explain a project: structure, key modules, entry points, build/test commands, conventions. Read-only (plan mode). Use to onboard onto an unfamiliar codebase without spending your own context reading it.",
+      "Read-only codebase exploration, the cheap counterpart to Claude's Explore. Two modes: omit `files` to get a general project map (layout, modules, entry points, build/test, conventions); pass `files` to answer a question about those specific files. Either way the code never enters your context — only the answer does.",
     inputSchema: {
-      focus: z
+      question: z
         .string()
         .optional()
-        .describe("Optional angle, e.g. 'how auth works', 'where the API routes live'. Omit for a general map."),
+        .describe("What you want to know. With `files`: a question about them. Without: an optional angle (e.g. 'how auth works'). Omit entirely for a general map."),
+      files: z
+        .array(z.string())
+        .optional()
+        .describe("Optional file paths to scope the exploration to (relative to cwd or absolute)."),
       ...routing,
     },
   },
-  async ({ focus, cwd, model, effort }) => {
-    const focusLine = focus
-      ? `Focus on: ${focus}.`
-      : "Give a general map: top-level layout, main modules and their responsibilities, entry points, how to build/test/run, and notable conventions.";
-    const prompt = `Explore this project and produce a concise structured overview. Read-only — do not modify anything. ${focusLine} Cite concrete paths.`;
-    return format(await runCursor({ prompt, cwd, model, effort, mode: "plan" }));
-  },
-);
-
-server.registerTool(
-  "analyze_files",
-  {
-    description:
-      "Answer questions about specific files without loading them into your context. Read-only (ask mode). Cheaper alternative to reading large files yourself.",
-    inputSchema: {
-      files: z.array(z.string()).min(1).describe("File paths to analyze (relative to cwd or absolute)."),
-      question: z.string().describe("What you want to know about these files."),
-      ...routing,
-    },
-  },
-  async ({ files, question, cwd, model, effort }) => {
-    const prompt = `Read these files and answer the question. Read-only — do not modify anything.\nFiles: ${files.join(", ")}\n\nQuestion: ${question}`;
-    return format(await runCursor({ prompt, cwd, model, effort, mode: "ask" }));
+  async ({ question, files, cwd, model, effort }) => {
+    let prompt: string;
+    let mode: "plan" | "ask";
+    if (files?.length) {
+      const q = question ?? "Summarize what these files do and how they fit together.";
+      prompt = `Read these files and answer. Read-only — do not modify anything.\nFiles: ${files.join(", ")}\n\nQuestion: ${q}`;
+      mode = "ask";
+    } else {
+      const focusLine = question
+        ? `Focus on: ${question}.`
+        : "Give a general map: top-level layout, main modules and their responsibilities, entry points, how to build/test/run, and notable conventions.";
+      prompt = `Explore this project and produce a concise structured overview. Read-only — do not modify anything. ${focusLine} Cite concrete paths.`;
+      mode = "plan";
+    }
+    return format(await runCursor({ prompt, cwd, model, effort, mode }));
   },
 );
 
