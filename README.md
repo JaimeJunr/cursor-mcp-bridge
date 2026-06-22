@@ -14,6 +14,7 @@ cheapest adequate model).
 |------|---------|
 | `delegate` | Run a task on the Cursor agent with full tool access in `cwd`. |
 | `explore` | Read-only exploration. No `files` → general project map; with `files` → answer about those files. The cheap counterpart to Claude's Explore. |
+| `web_lookup` | Web/docs lookup via the Cursor agent's web access. |
 | `follow_up` | Continue a prior session by `session_id`. |
 
 Every tool accepts: `cwd`, `model` (default `auto`), `effort` (applied only to parameterized

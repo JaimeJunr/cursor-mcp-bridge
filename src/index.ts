@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { runCursor, type CliResult } from "./cli.js";
 
-const server = new McpServer({ name: "cursor-mcp-bridge", version: "0.2.0" });
+const server = new McpServer({ name: "cursor-mcp-bridge", version: "0.3.0" });
 
 // Params de roteamento compartilhados.
 const routing = {
@@ -68,6 +68,19 @@ server.registerTool(
       mode = "plan";
     }
     return format(await runCursor({ prompt, cwd, model, effort, mode }));
+  },
+);
+
+server.registerTool(
+  "web_lookup",
+  {
+    description:
+      "Delegate a web/documentation lookup to the Cursor agent (which has web access): library docs, API references, error messages, current versions. Cheap way to fetch info newer than your training data.",
+    inputSchema: { query: z.string().describe("What to look up on the web."), ...routing },
+  },
+  async ({ query, cwd, model, effort }) => {
+    const prompt = `Look this up on the web and answer concisely with sources/links.\n\nQuery: ${query}`;
+    return format(await runCursor({ prompt, cwd, model, effort, mode: "ask" }));
   },
 );
 
