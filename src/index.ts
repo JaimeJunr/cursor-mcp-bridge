@@ -45,7 +45,7 @@ server.registerTool(
   "explore",
   {
     description:
-      "Read-only codebase exploration, the cheap counterpart to Claude's Explore. Two modes: omit `files` to get a general project map (layout, modules, entry points, build/test, conventions); pass `files` to answer a question about those specific files (the answer quotes relevant code inline with file:line). Either way the code never enters your context — only the answer does.",
+      "Read-only codebase exploration, the cheap counterpart to Claude's Explore. Two modes: omit `files` to get a general project map (layout, modules, entry points, build/test, conventions); pass `files` to answer a question about those specific files (the answer quotes relevant code inline with file:line). Either way the full files never enter your context — only the answer, which may include small quoted snippets.",
     inputSchema: {
       question: z
         .string()

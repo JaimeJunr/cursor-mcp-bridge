@@ -4,8 +4,9 @@
  */
 
 /**
- * read_slice: extrai só o trecho relevante de arquivo(s). O código nunca entra no
- * contexto do chamador — só as linhas pedidas. Ataca leitura de arquivo inteiro.
+ * read_slice: extrai só o trecho relevante de arquivo(s). O arquivo inteiro nunca
+ * entra no contexto do chamador — só as linhas pedidas (que são código). Ataca a
+ * leitura de arquivo inteiro.
  * @example readSlicePrompt(["auth.ts"], "the login handler")
  */
 export function readSlicePrompt(files: string[], want: string): string {

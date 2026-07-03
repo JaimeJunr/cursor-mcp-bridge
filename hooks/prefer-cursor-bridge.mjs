@@ -18,7 +18,8 @@
  */
 import { readFileSync, statSync } from "node:fs";
 
-const MIN_LINES = Number(process.env.CURSOR_BRIDGE_HOOK_MIN_LINES ?? 500);
+const PARSED_MIN_LINES = Number(process.env.CURSOR_BRIDGE_HOOK_MIN_LINES);
+const MIN_LINES = Number.isFinite(PARSED_MIN_LINES) && PARSED_MIN_LINES > 0 ? PARSED_MIN_LINES : 500;
 const BIG_BYTES = 2 * 1024 * 1024; // acima disto não conta linhas — já é "grande"
 const SKIP_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|wasm|mp4|mov|woff2?)$/i;
 

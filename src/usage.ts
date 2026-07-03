@@ -30,14 +30,24 @@ export function logUsage(tool: string, outChars: number): void {
 /** Lê e parseia o JSONL. Devolve [] se o arquivo não existir ou não houver log. */
 export function readUsage(): UsageEntry[] {
   if (!USAGE_LOG) return [];
+  let raw: string;
   try {
-    return readFileSync(USAGE_LOG, "utf8")
-      .split("\n")
-      .filter((l) => l.trim())
-      .map((l) => JSON.parse(l) as UsageEntry);
+    raw = readFileSync(USAGE_LOG, "utf8");
   } catch {
     return [];
   }
+  // Parse linha a linha e ignora as malformadas — uma escrita parcial ou edição
+  // manual não deve zerar todas as stats.
+  const out: UsageEntry[] = [];
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      out.push(JSON.parse(line) as UsageEntry);
+    } catch {
+      // pula a linha corrompida
+    }
+  }
+  return out;
 }
 
 /** Agrega entradas por tool: nº de chamadas, total e média de chars devolvidos. Função pura. */
