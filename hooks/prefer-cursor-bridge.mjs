@@ -122,7 +122,9 @@ function loadSeen(p) {
 
 function saveSeen(p, set) {
   try {
-    writeFileSync(p, JSON.stringify([...set]));
+    // mode 0600: estado por sessão em tmp compartilhado não deve ser legível/gravável
+    // por outros usuários (evita que influenciem o dedup). Best-effort.
+    writeFileSync(p, JSON.stringify([...set]), { mode: 0o600 });
   } catch {
     // best-effort: falha ao persistir só significa que o nudge pode repetir.
   }

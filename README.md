@@ -113,7 +113,8 @@ to ignore it *and* every fire costs tokens.
 >   that preload reminder, so the schemas get loaded even in a Read-only or web-only session.
 
 To reset the dedup and see the nudges again, start a new session (or delete
-`$TMPDIR/cursor-bridge-nudged-<session_id>.json`).
+`cursor-bridge-nudged-<session_id>.json` from your OS temp dir — `os.tmpdir()`,
+e.g. `/tmp` on Linux, not necessarily `$TMPDIR`).
 
 **2. Preload the deferred tools.** Tell the agent to load the schemas once per session so
 they are "in hand". Add to your `CLAUDE.md`/`AGENTS.md`:
