@@ -1,0 +1,49 @@
+import { describe, it, expect } from "vitest";
+import { readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt } from "../src/prompts.js";
+
+describe("readSlicePrompt", () => {
+  it("names the files and the target, and forbids the full dump", () => {
+    const p = readSlicePrompt(["a.ts", "b.ts"], "the foo function");
+    expect(p).toContain("a.ts, b.ts");
+    expect(p).toContain("the foo function");
+    expect(p).toMatch(/file:line/i);
+    expect(p).toMatch(/read-only|do not modify/i);
+  });
+});
+
+describe("runFilteredPrompt", () => {
+  it("embeds the command and the relevance filter", () => {
+    const p = runFilteredPrompt("npm test", "failing tests only");
+    expect(p).toContain("npm test");
+    expect(p).toContain("failing tests only");
+  });
+
+  it("works without an explicit filter", () => {
+    const p = runFilteredPrompt("npm run build");
+    expect(p).toContain("npm run build");
+  });
+});
+
+describe("explorePrompt", () => {
+  it("uses plan mode and a general map when no files", () => {
+    const { prompt, mode } = explorePrompt();
+    expect(mode).toBe("plan");
+    expect(prompt).toMatch(/map|layout/i);
+  });
+
+  it("uses ask mode, scopes to files, and asks for code snippets", () => {
+    const { prompt, mode } = explorePrompt("how does auth work", ["auth.ts"]);
+    expect(mode).toBe("ask");
+    expect(prompt).toContain("auth.ts");
+    expect(prompt).toContain("how does auth work");
+    expect(prompt).toMatch(/snippet|file:line|relevant code/i);
+  });
+});
+
+describe("webLookupPrompt", () => {
+  it("embeds the query and asks for sources", () => {
+    const p = webLookupPrompt("zod v4 changes");
+    expect(p).toContain("zod v4 changes");
+    expect(p).toMatch(/source|link/i);
+  });
+});
