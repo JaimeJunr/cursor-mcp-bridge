@@ -65,7 +65,7 @@ claude mcp add cursor-bridge -s user -- node /abs/path/to/cursor-mcp-bridge/dist
 | `CURSOR_BRIDGE_FORCE` | _(off)_ | If `1`/`true`, pass `--force` so commands run without prompts. |
 | `CURSOR_BRIDGE_TIMEOUT_MS` | `600000` | Per-call timeout. |
 | `CURSOR_BRIDGE_LOG` | _(off)_ | Path to a JSONL file; when set, every call logs `{tool, outChars}` for `bridge_stats`. |
-| `CURSOR_BRIDGE_HOOK_MIN_LINES` | `500` | Line threshold above which the optional hook (below) nudges toward `read_slice`. |
+| `CURSOR_BRIDGE_HOOK_MIN_LINES` | `300` | Line threshold above which the optional hook (below) nudges toward `read_slice`. |
 
 > **Security:** `delegate` and `run_filtered` can run shell autonomously (with `CURSOR_BRIDGE_FORCE`).
 > `explore`, `read_slice` and `web_lookup` run in read-only modes (`plan` / `ask`).
@@ -82,16 +82,15 @@ strongest first:
 the bridge at the moment it reaches for a native tool — text in a config file loses under
 pressure, a call-time reminder does not. This repo ships one at
 [`hooks/prefer-cursor-bridge.mjs`](hooks/prefer-cursor-bridge.mjs): it is non-blocking,
-runs on `node` (already required), and only fires where it pays — a whole-file `Read`
-over `CURSOR_BRIDGE_HOOK_MIN_LINES` lines, or any native `WebSearch`/`WebFetch`. Wire it
-into your host's settings (Claude Code `settings.json`):
+runs on `node` (already required), and only fires where it pays. Wire it into your host's
+settings (Claude Code `settings.json`):
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|WebSearch|WebFetch",
+        "matcher": "Read|Grep|Glob|WebSearch|WebFetch",
         "hooks": [
           { "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-cursor-bridge.mjs", "timeout": 5 }
         ]
@@ -101,8 +100,20 @@ into your host's settings (Claude Code `settings.json`):
 }
 ```
 
-> Grep/Glob are left out on purpose: they fire constantly, so nudging them costs more
-> tokens than it saves. Add them to the `matcher` only if you want the extra pressure.
+What it emits, and when — each fires **at most once per session** (deduplicated in a tmp
+file keyed by `session_id`), because a repeated nudge is worse than none: the agent learns
+to ignore it *and* every fire costs tokens.
+
+> - **`Read`** over `CURSOR_BRIDGE_HOOK_MIN_LINES` lines → suggests `read_slice` (once per file).
+> - **`WebSearch`/`WebFetch`** → suggests `web_lookup` (once).
+> - **`Grep`/`Glob`** → emits the one-time **preload** reminder to run the `ToolSearch` for the
+>   deferred bridge tools. This is why Grep/Glob can sit in the matcher without the old
+>   constant-noise cost — the dedup collapses them to a single fire.
+> - The **first** qualifying nudge of the session (whichever tool triggers it) also carries
+>   that preload reminder, so the schemas get loaded even in a Read-only or web-only session.
+
+To reset the dedup and see the nudges again, start a new session (or delete
+`$TMPDIR/cursor-bridge-nudged-<session_id>.json`).
 
 **2. Preload the deferred tools.** Tell the agent to load the schemas once per session so
 they are "in hand". Add to your `CLAUDE.md`/`AGENTS.md`:
