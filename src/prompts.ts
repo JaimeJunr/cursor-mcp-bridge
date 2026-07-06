@@ -13,7 +13,11 @@ export function readSlicePrompt(files: string[], want: string): string {
   return [
     "Read the file(s) below and return ONLY the code relevant to the target.",
     "Read-only — do not modify anything.",
-    "Output the exact lines verbatim, each prefixed with `file:line`.",
+    "Output each matching line as `file:line: <the exact source code on that line>`.",
+    "The line's source code is REQUIRED — never emit the `file:line` prefix by itself.",
+    "Example of the expected format (one line per source line):",
+    "  src/auth.ts:42: export function login(req, res) {",
+    "  src/auth.ts:43:   const token = sign(req.user);",
     "Do NOT dump whole files, do NOT summarize, do NOT add commentary beyond the requested lines.",
     "If nothing matches, say so in one line.",
     "",

@@ -9,6 +9,15 @@ describe("readSlicePrompt", () => {
     expect(p).toMatch(/file:line/i);
     expect(p).toMatch(/read-only|do not modify/i);
   });
+
+  it("demands the source code alongside the prefix, not the prefix alone", () => {
+    const p = readSlicePrompt(["a.ts"], "the foo function");
+    // Regressão: o Cursor devolvia só `file:line` sem o código. O prompt precisa
+    // exigir o código na mesma linha e dar um exemplo do formato.
+    expect(p).toMatch(/file:line:\s*<.*code.*>/i);
+    expect(p).toMatch(/never emit the .*prefix by itself/i);
+    expect(p).toMatch(/\.ts:\d+:\s+\S+/); // exemplo tem prefixo seguido de código real
+  });
 });
 
 describe("runFilteredPrompt", () => {
