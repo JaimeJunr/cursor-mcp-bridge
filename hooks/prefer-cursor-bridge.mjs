@@ -112,9 +112,12 @@ export function buildAgentUpdatedInput(toolInput, routeFn) {
   } catch {
     return null;
   }
-  // context-mode pode ter trocado subagent_type (ex.: Bash → general-purpose); preservamos base.
-  const bField = AGENT_FIELDS.find((f) => f in base) ?? field;
-  return { ...base, [bField]: String(base[bField] ?? cur) + AGENT_PREF };
+  // Anexa no MESMO campo detectado em toolInput: context-mode reusa a mesma ordem de
+  // AGENT_FIELDS e faz spread do input, então base[field] existe (>= o bloco dele) e o
+  // marcador de idempotência (checado em toolInput[field]) e a escrita coincidem. O spread
+  // de `base` preserva qualquer outro campo que o context-mode alterou (ex.: subagent_type
+  // Bash → general-purpose). O `?? cur` cobre um routeFn degenerado que não setou o campo.
+  return { ...base, [field]: String(base[field] ?? cur) + AGENT_PREF };
 }
 
 /**
@@ -227,7 +230,10 @@ async function handleAgent(data) {
   }
   const updatedInput = buildAgentUpdatedInput(toolInput, routeFn);
   if (!updatedInput) return;
-  // Termina depois do hook (mais pesado) do context-mode para vencer o last-wins.
+  // Best-effort: atrasa a emissão para terminar depois do hook (mais pesado) do
+  // context-mode e vencer o last-wins não-determinístico. NÃO é garantia — se o
+  // context-mode demorar mais que AGENT_DELAY_MS, ele vence e a preferência não entra
+  // (o bloco dele sempre sobrevive). Ajuste via CURSOR_BRIDGE_AGENT_DELAY_MS.
   if (AGENT_DELAY_MS > 0) await new Promise((r) => setTimeout(r, AGENT_DELAY_MS));
   process.stdout.write(
     JSON.stringify({

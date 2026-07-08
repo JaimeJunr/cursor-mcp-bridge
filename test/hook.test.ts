@@ -108,6 +108,17 @@ describe("buildAgentUpdatedInput — injeção no subagent", () => {
     expect(res).toBeNull();
   });
 
+  it("toolInput sem campo de prompt conhecido → usa 'prompt', sem literal 'undefined'", () => {
+    const route = (ti: Record<string, unknown>) => ({
+      action: "modify",
+      updatedInput: { ...ti, prompt: "" + CM_BLOCK },
+    });
+    const res = buildAgentUpdatedInput({ foo: "bar" }, route);
+    expect(res.prompt).toContain("CTX");
+    expect(res.prompt).toContain(CURSOR_BRIDGE_MARKER);
+    expect(res.prompt).not.toContain("undefined");
+  });
+
   it("preserva outros campos que o context-mode alterou (ex.: subagent_type)", () => {
     const route = (ti: Record<string, unknown>) => ({
       action: "modify",
