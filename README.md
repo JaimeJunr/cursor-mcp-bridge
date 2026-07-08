@@ -66,6 +66,8 @@ claude mcp add cursor-bridge -s user -- node /abs/path/to/cursor-mcp-bridge/dist
 | `CURSOR_BRIDGE_TIMEOUT_MS` | `600000` | Per-call timeout. |
 | `CURSOR_BRIDGE_LOG` | _(off)_ | Path to a JSONL file; when set, every call logs `{tool, outChars}` for `bridge_stats`. |
 | `CURSOR_BRIDGE_HOOK_MIN_LINES` | `300` | Line threshold above which the optional hook (below) nudges toward `read_slice`. |
+| `CURSOR_BRIDGE_AGENT_DELAY_MS` | `350` | Delay before the `Agent\|Task` injection emits, to win the last-wins race vs context-mode. `0` disables. |
+| `CONTEXT_MODE_ROUTING` | _(marketplace path)_ | Override path to context-mode's `routing.mjs` (imported to preserve its block in subagents). |
 
 > **Security:** `delegate` and `run_filtered` can run shell autonomously (with `CURSOR_BRIDGE_FORCE`).
 > `explore`, `read_slice` and `web_lookup` run in read-only modes (`plan` / `ask`).
@@ -115,6 +117,34 @@ to ignore it *and* every fire costs tokens.
 To reset the dedup and see the nudges again, start a new session (or delete
 `cursor-bridge-nudged-<session_id>.json` from your OS temp dir — `os.tmpdir()`,
 e.g. `/tmp` on Linux, not necessarily `$TMPDIR`).
+
+### Reaching subagents too (`Agent|Task` matcher)
+
+The nudges above only steer the **main loop**. Spawned subagents never see them —
+and if you also run the [context-mode](https://github.com/) plugin, its own
+`Agent|Task` hook appends a strong "route everything through context-mode" block
+to each subagent prompt that never mentions the bridge, so subagents are born
+blind to it. Wire this hook for `Agent|Task` as well to fix that:
+
+```json
+{ "matcher": "Agent|Task",
+  "hooks": [{ "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-cursor-bridge.mjs", "timeout": 10 }] }
+```
+
+On an `Agent`/`Task` call the hook appends a compact cursor-bridge preference
+(plus the `ToolSearch` preload line) to the subagent's prompt via `updatedInput`.
+
+> **Coexisting with context-mode.** Multiple PreToolUse hooks returning
+> `updatedInput` for one tool do **not** merge — it's last-to-finish-wins,
+> non-deterministic. To never clobber context-mode's block, this hook **imports
+> context-mode's live routing**, takes the prompt it would produce (already
+> carrying its block), and appends the bridge preference to it. So whoever wins
+> the race, context-mode's block survives; the bridge preference lands whenever
+> **this** hook wins — which `CURSOR_BRIDGE_AGENT_DELAY_MS` (default `350`ms)
+> biases toward by finishing after context-mode's heavier hook. If context-mode's
+> routing can't be imported the hook injects **nothing** (preserving context-mode
+> is the invariant). Set `CONTEXT_MODE_ROUTING` to point at a non-default path,
+> or `CURSOR_BRIDGE_AGENT_DELAY_MS=0` to disable the delay.
 
 **2. Preload the deferred tools.** Tell the agent to load the schemas once per session so
 they are "in hand". Add to your `CLAUDE.md`/`AGENTS.md`:

@@ -4,7 +4,8 @@
  * token-expensive native tools, at the moment of the call (text alone in
  * CLAUDE.md loses to structural friction; a call-time reminder wins).
  *
- * Wire it for the matcher "Read|Grep|Glob|WebSearch|WebFetch" (see README).
+ * Wire it for "Read|Grep|Glob|WebSearch|WebFetch" (main-loop nudges) AND for
+ * "Agent|Task" (inject the preference into spawned subagent prompts). See README.
  *
  * Design constraints:
  *  - Cheap: only emits a nudge when it actually pays off (large whole-file
@@ -24,7 +25,7 @@
  *  - CURSOR_BRIDGE_HOOK_MIN_LINES: line threshold for the Read nudge (default 300).
  */
 import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -43,6 +44,78 @@ const WEB_TEXT =
   "cursor-bridge available: prefer web_lookup(query) over native web tools — the Cursor agent reads the " +
   "pages and returns summary+links instead of dumping raw results into your context. Skip only if you " +
   "need the raw HTML/DOM to parse.";
+
+// ---- Agent/Task injection: teach spawned subagents about cursor-bridge too ----
+//
+// Subagents never see the main-loop nudges above; the only way to reach a
+// subagent's prompt from a PreToolUse hook is `updatedInput` on the Agent/Task
+// call. The context-mode plugin already does exactly that — it appends a strong
+// "route everything through context-mode" block to the subagent prompt, and it
+// never mentions cursor-bridge. So subagents are born blind to the bridge.
+//
+// We append a cursor-bridge preference to the same prompt. But multiple hooks
+// returning `updatedInput` for one tool DON'T merge — it's last-to-finish-wins,
+// non-deterministic (Claude Code hooks are parallel). To never clobber
+// context-mode's block, we reproduce it: import context-mode's live routing,
+// take the prompt it would produce (already carrying its block), and append
+// ours. Then whoever wins the race, context-mode's block survives; cursor-bridge
+// survives only when WE win — which the delay below biases toward.
+//
+// If context-mode's routing can't be imported, we stay OUT entirely (return
+// null): injecting a cursor-bridge-only prompt could win the race and drop
+// context-mode's block. Preserving context-mode is the hard invariant.
+
+/** Prompt field names a subagent call may carry, in the same order context-mode probes. */
+const AGENT_FIELDS = ["prompt", "request", "objective", "question", "query", "task"];
+
+/** Marker for idempotency — never inject twice into the same prompt. */
+export const CURSOR_BRIDGE_MARKER = "<cursor_bridge_preference>";
+
+/** Live context-mode routing module (exports routePreToolUse). Override for tests/relocation. */
+const CM_ROUTING =
+  process.env.CONTEXT_MODE_ROUTING ||
+  join(homedir(), ".claude", "plugins", "marketplaces", "context-mode", "hooks", "core", "routing.mjs");
+
+/** ms to wait before emitting, to finish after context-mode's heavier hook and win the last-wins race. 0 disables. */
+const PARSED_DELAY = Number(process.env.CURSOR_BRIDGE_AGENT_DELAY_MS);
+const AGENT_DELAY_MS = Number.isFinite(PARSED_DELAY) && PARSED_DELAY >= 0 ? PARSED_DELAY : 350;
+
+const AGENT_PREF =
+  `\n\n${CURSOR_BRIDGE_MARKER}\n` +
+  "cursor-bridge MCP is available to you (a subagent) — the cheap/fast Cursor worker. For PURE " +
+  "reading/locating/web where you will NOT edit the file, prefer it over native Read/Grep/Glob/" +
+  "WebSearch/WebFetch: explore(question,files?) to map or answer, read_slice(files,want) for one " +
+  "section of a large file, run_filtered(command,want) to strip noisy build/test output, " +
+  "web_lookup(query) for docs/errors/versions. These tools are DEFERRED — run " +
+  'ToolSearch("select:mcp__cursor-bridge__read_slice,mcp__cursor-bridge__explore,' +
+  'mcp__cursor-bridge__run_filtered,mcp__cursor-bridge__web_lookup") ONCE before exploring so their ' +
+  "schemas load. If you WILL edit a file, native Read is correct. This complements the context-mode " +
+  "routing above — both keep raw output out of your context; when both fit, either is fine.\n" +
+  "</cursor_bridge_preference>";
+
+/**
+ * Pure builder for the Agent/Task `updatedInput`. `routeFn(toolInput)` must return
+ * context-mode's normalized decision ({ action:"modify", updatedInput }) so its block
+ * is preserved. Returns the combined updatedInput, or null to inject nothing (already
+ * injected, or context-mode routing unavailable/unexpected).
+ * @example buildAgentUpdatedInput({ prompt: "do x" }, () => ({ action: "modify", updatedInput: { prompt: "do x<CM>" } }))
+ */
+export function buildAgentUpdatedInput(toolInput, routeFn) {
+  const field = AGENT_FIELDS.find((f) => f in toolInput) ?? "prompt";
+  const cur = typeof toolInput[field] === "string" ? toolInput[field] : "";
+  if (cur.includes(CURSOR_BRIDGE_MARKER)) return null; // idempotente
+  let base;
+  try {
+    const d = routeFn(toolInput);
+    if (!d || d.action !== "modify" || !d.updatedInput) return null;
+    base = d.updatedInput;
+  } catch {
+    return null;
+  }
+  // context-mode pode ter trocado subagent_type (ex.: Bash → general-purpose); preservamos base.
+  const bField = AGENT_FIELDS.find((f) => f in base) ?? field;
+  return { ...base, [bField]: String(base[bField] ?? cur) + AGENT_PREF };
+}
 
 /**
  * Pure decision: given the tool call and the set of nudges already fired this
@@ -136,12 +209,48 @@ function nudge(text) {
   );
 }
 
-function main() {
+/**
+ * Agent/Task path: append the cursor-bridge preference to the subagent prompt,
+ * preserving context-mode's block. No session dedup — every spawned subagent
+ * needs its own injection; idempotency is by the marker in the prompt.
+ */
+async function handleAgent(data) {
+  const toolInput = data?.tool_input ?? {};
+  const projectDir = process.env.CLAUDE_PROJECT_DIR;
+  let routeFn;
+  try {
+    const mod = await import(pathToFileURL(CM_ROUTING).href);
+    if (typeof mod.routePreToolUse !== "function") return; // context-mode ausente → não arrisca clobber
+    routeFn = (ti) => mod.routePreToolUse("Agent", ti, projectDir, "claude-code");
+  } catch {
+    return;
+  }
+  const updatedInput = buildAgentUpdatedInput(toolInput, routeFn);
+  if (!updatedInput) return;
+  // Termina depois do hook (mais pesado) do context-mode para vencer o last-wins.
+  if (AGENT_DELAY_MS > 0) await new Promise((r) => setTimeout(r, AGENT_DELAY_MS));
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "allow",
+        permissionDecisionReason: "cursor-bridge preference added to subagent prompt",
+        updatedInput,
+      },
+    }),
+  );
+}
+
+async function main() {
   let data;
   try {
     data = JSON.parse(readFileSync(0, "utf8"));
   } catch {
     process.exit(0); // sem input parseável → não atrapalha
+  }
+  if (data?.tool_name === "Agent" || data?.tool_name === "Task") {
+    await handleAgent(data);
+    process.exit(0);
   }
   const sessionId = typeof data?.session_id === "string" && data.session_id ? data.session_id : "default";
   const path = seenPath(sessionId);
