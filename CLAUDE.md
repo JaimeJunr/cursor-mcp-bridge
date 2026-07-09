@@ -28,8 +28,11 @@ There is no linter configured. `npm run build` (tsc, `strict: true`) is the type
 Four small modules under `src/`, each with a matching `test/*.test.ts`. The split exists so the
 **pure logic is testable without spawning the Cursor process**:
 
-- `index.ts` — MCP server + tool registrations. Owns tool descriptions and the shared `routing`
-  params (`cwd`/`model`/`effort`). `format()` appends the `session_id` footer and logs usage.
+- `index.ts` — MCP server + tool registrations (seven tools: `delegate`, `explore`, `read_slice`,
+  `run_filtered`, `web_lookup`, `follow_up`, `bridge_stats`). Owns tool descriptions and the shared
+  `routing` params (`cwd`/`model`/`effort`). `format()` appends the `session_id` footer and logs
+  usage; `follow_up` feeds that id back as `RunOpts.resume` (`--resume`) so a prior Cursor session
+  continues without resending its context — the footer and `follow_up` are two ends of the same loop.
 - `cli.ts` — the only module that touches the child process. `runCursor()` spawns `agent -p`;
   `buildCursorArgs()`, `resolveModel()`, `parseCliJson()` are **pure** and unit-tested. Keep the
   spawn boundary here — do not spawn from elsewhere.
@@ -46,6 +49,10 @@ Four small modules under `src/`, each with a matching `test/*.test.ts`. The spli
   change a read-only tool to run without a mode.
 - **`auto` ignores `effort`.** `resolveModel` only appends `[effort=...]` for non-`auto` models.
   `auto` is the default model (cheapest); keep it the default.
+- **`explore` defaults to `composer-2.5`, not `auto`.** `EXPLORE_MODEL` (env `CURSOR_BRIDGE_EXPLORE_MODEL`)
+  is applied in the `explore` handler as `model ?? EXPLORE_MODEL` — exploration runs on Cursor's cheap
+  composer model so it never escalates to the caller's expensive model. An explicit `model` still wins.
+  `explore` also takes `breadth` (`medium`|`thorough`) → passed to `explorePrompt`; it LOCATES, never reviews.
 - **`read_slice` must return source lines, not just `file:line` prefixes** — this is an explicit
   instruction in `readSlicePrompt` and was a real regression (commit c41c2af). Preserve it.
 - **`parseCliJson` degrades gracefully**: non-JSON stdout falls back to raw text; `usage.ts`
@@ -54,10 +61,13 @@ Four small modules under `src/`, each with a matching `test/*.test.ts`. The spli
 
 ## The hook (`hooks/prefer-cursor-bridge.mjs`)
 
-Ships separately from the server: a `PreToolUse` hook the host wires for
-`Read|Grep|Glob|WebSearch|WebFetch`. It nudges the agent toward the bridge at call time because
-these MCP tools are **deferred** (schemas load only via ToolSearch) and lose to always-loaded
-native tools by default. Design constraints, all tested in `test/hook.test.ts`:
+Ships separately from the server: a hook the host wires for `PreToolUse`
+(`Read|Grep|Glob|WebSearch|WebFetch|Bash` and `Agent|Task`) and for `SessionStart`. It nudges the
+agent toward the bridge because these MCP tools are **deferred** (schemas load only via ToolSearch)
+and lose to always-loaded native tools by default. On `Bash` it only fires for artifact-writing
+commands (`git commit`/`push`, `git worktree add`, `gh pr create`, `bkt pr create`) — nudging that
+grunt-work to `delegate`; read-only Bash is left alone (rtk already trims it). Design constraints,
+all tested in `test/hook.test.ts`:
 
 - Pure decision in `decide(input, deps)` with injectable fs — that's what the tests exercise.
   The I/O wrapper (`main`) only runs when invoked as a script.
@@ -65,11 +75,19 @@ native tools by default. Design constraints, all tested in `test/hook.test.ts`:
   nudge fires at most once. A repeated nudge is worse than none. This is why `Grep`/`Glob` can
   sit in the matcher — they collapse to a single preload reminder.
 - The first qualifying nudge of a session also carries the one-time preload reminder.
+- **`SessionStart` closes the Bash-grep hole:** the PreToolUse preload only fires on the `Grep`/`Read`
+  tool, but agents often use `Bash grep` (matches no matcher), so the preload never arrived.
+  `sessionStartContext()` injects it as `additionalContext` before the first tool decision and
+  pre-marks `preload` in the dedup file so the PreToolUse piggyback never repeats it.
 - Never blocks the tool; any error → print nothing, exit 0.
 - Threshold for the Read nudge is `CURSOR_BRIDGE_HOOK_MIN_LINES` (default 300).
 
 The hook also matches **`Agent|Task`** to reach spawned subagents (`buildAgentUpdatedInput` +
-`handleAgent`). Subagents never see the main-loop nudges, and the context-mode plugin's own
+`handleAgent`). When `subagent_type === "Explore"`, `agentPref()` appends `EXPLORE_EXTRA` — an extra
+line telling that run (spawned on the orchestrator's expensive model) to route all reading through
+`explore`/`read_slice` (which run on cheap composer). `sessionStartContext()` carries the matching
+main-loop steer: prefer calling `explore()` directly over spawning the Explore subagent.
+Subagents never see the main-loop nudges, and the context-mode plugin's own
 `Agent|Task` hook appends a "route everything through context-mode" block that never mentions the
 bridge. **Critical constraint:** multiple PreToolUse hooks returning `updatedInput` for one tool do
 NOT merge — last-to-finish-wins, non-deterministic. So `handleAgent` **imports context-mode's live

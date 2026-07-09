@@ -34,7 +34,7 @@ describe("runFilteredPrompt", () => {
 });
 
 describe("explorePrompt", () => {
-  it("uses plan mode and a general map when no files", () => {
+  it("uses plan mode and a general map when no files and no question", () => {
     const { prompt, mode } = explorePrompt();
     expect(mode).toBe("plan");
     expect(prompt).toMatch(/map|layout/i);
@@ -46,6 +46,22 @@ describe("explorePrompt", () => {
     expect(prompt).toContain("auth.ts");
     expect(prompt).toContain("how does auth work");
     expect(prompt).toMatch(/snippet|file:line|relevant code/i);
+  });
+
+  it("question without files → fan-out search (Explore-grade): file:line refs, locate-not-review", () => {
+    const { prompt, mode } = explorePrompt("where is the login handler defined");
+    expect(mode).toBe("plan");
+    expect(prompt).toContain("where is the login handler defined");
+    expect(prompt).toMatch(/file:line/i);
+    expect(prompt).toMatch(/fan.?out|sweep|multiple|naming convention/i);
+    expect(prompt).toMatch(/locate|do not (review|audit|judge)/i);
+  });
+
+  it("breadth 'thorough' pushes exhaustiveness harder than the default", () => {
+    const medium = explorePrompt("find all call sites of foo").prompt;
+    const thorough = explorePrompt("find all call sites of foo", undefined, "thorough").prompt;
+    expect(thorough).toMatch(/exhaustive|every|thorough|don.t stop/i);
+    expect(thorough).not.toEqual(medium);
   });
 });
 

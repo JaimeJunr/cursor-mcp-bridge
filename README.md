@@ -13,7 +13,7 @@ cheapest adequate model).
 | Tool | Purpose |
 |------|---------|
 | `delegate` | Run a task on the Cursor agent with full tool access in `cwd`. |
-| `explore` | Read-only exploration. No `files` → general project map; with `files` → answer about those files (quotes relevant code inline with `file:line`). The cheap counterpart to Claude's Explore. |
+| `explore` | Read-only exploration, the cheap Explore (runs on Cursor's `composer` model). `question` alone → broad fan-out search returning `file:line` refs; `question`+`files` → answer about those files; neither → general project map. `breadth: "thorough"` sweeps wider. Locates, does not review. Prefer it over spawning the Explore subagent. |
 | `read_slice` | Surgical read-only read: returns ONLY the code relevant to `want` (exact lines with `file:line`) from the given `files` — the full file never enters your context. Use instead of reading large files whole. |
 | `run_filtered` | Run a shell `command` and get back ONLY the lines relevant to `want` — semantic filtering of huge build/test/log output. |
 | `web_lookup` | Web/docs lookup via the Cursor agent's web access. |
@@ -62,6 +62,7 @@ claude mcp add cursor-bridge -s user -- node /abs/path/to/cursor-mcp-bridge/dist
 |-----|---------|---------|
 | `CURSOR_BIN` | `agent` | Path to the Cursor CLI binary. |
 | `CURSOR_BRIDGE_MODEL` | `auto` | Default model when a call omits `model`. |
+| `CURSOR_BRIDGE_EXPLORE_MODEL` | `composer-2.5` | Model for `explore` when the call omits `model` — the cheap/fast Cursor model, so exploration never escalates to the orchestrator's expensive model. |
 | `CURSOR_BRIDGE_FORCE` | _(off)_ | If `1`/`true`, pass `--force` so commands run without prompts. |
 | `CURSOR_BRIDGE_TIMEOUT_MS` | `600000` | Per-call timeout. |
 | `CURSOR_BRIDGE_LOG` | _(off)_ | Path to a JSONL file; when set, every call logs `{tool, outChars}` for `bridge_stats`. |
@@ -92,7 +93,7 @@ settings (Claude Code `settings.json`):
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Grep|Glob|WebSearch|WebFetch",
+        "matcher": "Read|Grep|Glob|WebSearch|WebFetch|Bash",
         "hooks": [
           { "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-cursor-bridge.mjs", "timeout": 5 }
         ]
@@ -111,12 +112,38 @@ to ignore it *and* every fire costs tokens.
 > - **`Grep`/`Glob`** → emits the one-time **preload** reminder to run the `ToolSearch` for the
 >   deferred bridge tools. This is why Grep/Glob can sit in the matcher without the old
 >   constant-noise cost — the dedup collapses them to a single fire.
+> - **`Bash`** whose command writes an artifact (`git commit`/`push`, `git worktree add`,
+>   `gh pr create`, `gh issue create`, `bkt pr create`) → suggests offloading that grunt-work to
+>   `delegate` (once). Read-only Bash (status/diff/log/checkout) is left alone — the orchestrator
+>   needs that state, and a mechanical filter (e.g. rtk) already trims the noise.
 > - The **first** qualifying nudge of the session (whichever tool triggers it) also carries
 >   that preload reminder, so the schemas get loaded even in a Read-only or web-only session.
 
 To reset the dedup and see the nudges again, start a new session (or delete
 `cursor-bridge-nudged-<session_id>.json` from your OS temp dir — `os.tmpdir()`,
 e.g. `/tmp` on Linux, not necessarily `$TMPDIR`).
+
+### Preloading at session start (`SessionStart`)
+
+The PreToolUse preload above only fires when the agent uses the **`Grep`/`Read`** tool. But
+under pressure agents often reach for **`Bash grep`** instead, which matches no PreToolUse
+matcher — so the preload reminder never arrives and the deferred bridge tools stay unloaded
+the whole session. Wire the same hook for `SessionStart` to close that hole: the preload
+reminder then lands in context **before the first tool decision**, regardless of how the agent
+searches.
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [{ "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-cursor-bridge.mjs", "timeout": 5 }] }
+    ]
+  }
+}
+```
+
+On `SessionStart` the hook emits the `ToolSearch` preload as `additionalContext` and pre-marks
+`preload` as seen in the session's dedup file, so the PreToolUse piggyback never repeats it.
 
 ### Reaching subagents too (`Agent|Task` matcher)
 
@@ -133,6 +160,10 @@ blind to it. Wire this hook for `Agent|Task` as well to fix that:
 
 On an `Agent`/`Task` call the hook appends a compact cursor-bridge preference
 (plus the `ToolSearch` preload line) to the subagent's prompt via `updatedInput`.
+When `subagent_type` is `Explore` it appends an extra line: that Explore run was spawned on the
+orchestrator's expensive model (Explore inherits the session model, capped at Opus), so it should
+route **all** reading through `explore`/`read_slice` (which run on the cheap `composer` model) and
+keep the expensive shell to orchestration only.
 
 > **Coexisting with context-mode.** Multiple PreToolUse hooks returning
 > `updatedInput` for one tool do **not** merge — it's last-to-finish-wins,
