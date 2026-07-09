@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { runCursor, type CliResult } from "./cli.js";
+import { runCursor, EXPLORE_MODEL, type CliResult } from "./cli.js";
 import { readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt } from "./prompts.js";
 import { logUsage, readUsage, aggregate } from "./usage.js";
 
@@ -35,7 +35,7 @@ server.registerTool(
   "delegate",
   {
     description:
-      "Delegate a task to the Cursor CLI agent running headless (agent -p). Cheap/fast worker with full tool access (read, edit, shell) in cwd. Use for routine implementation, edits, and tasks where a cheaper model is enough.",
+      "Delegate a task to the Cursor CLI agent running headless (agent -p) — the cheap/fast worker with full tool access (read, edit, shell) in cwd. As the orchestrator, offload grunt-work here instead of spending your own expensive tokens: commits, opening/updating PRs, writing tickets/comments, small mechanical or 2-line edits, running a build/test and fixing it, and routine implementation where a cheaper model is enough. Give a complete, self-contained instruction — Cursor does not see your context.",
     inputSchema: { prompt: z.string().describe("The complete task prompt for the Cursor agent."), ...routing },
   },
   async ({ prompt, cwd, model, effort }) => format("delegate", await runCursor({ prompt, cwd, model, effort })),
@@ -45,22 +45,26 @@ server.registerTool(
   "explore",
   {
     description:
-      "Read-only codebase exploration, the cheap counterpart to Claude's Explore. Two modes: omit `files` to get a general project map (layout, modules, entry points, build/test, conventions); pass `files` to answer a question about those specific files (the answer quotes relevant code inline with file:line). Either way the full files never enter your context — only the answer, which may include small quoted snippets.",
+      "Read-only codebase exploration, the cheap Explore. Prefer this over spawning the Explore subagent for locating/mapping code: it runs on Cursor's composer model (cheap/fast) and keeps file dumps out of your context — you get back only the conclusion plus concrete file:line references. Three modes: (a) `question` alone → broad fan-out search across the repo (follows naming conventions, checks multiple locations) returning file:line refs; (b) `question`+`files` → scoped answer about those files; (c) neither → a general project map. It LOCATES, it does not review/audit — use a Task subagent for judgment.",
     inputSchema: {
       question: z
         .string()
         .optional()
-        .describe("What you want to know. With `files`: a question about them. Without: an optional angle (e.g. 'how auth works'). Omit entirely for a general map."),
+        .describe("What you want to know. Alone: a fan-out search (e.g. 'where is X defined', 'all call sites of Y'). With `files`: a question about them. Omit entirely for a general map."),
       files: z
         .array(z.string())
         .optional()
         .describe("Optional file paths to scope the exploration to (relative to cwd or absolute)."),
+      breadth: z
+        .enum(["medium", "thorough"])
+        .optional()
+        .describe("How wide to sweep on a fan-out search (no `files`). 'thorough' chases every plausible location/naming convention. Default 'medium'."),
       ...routing,
     },
   },
-  async ({ question, files, cwd, model, effort }) => {
-    const { prompt, mode } = explorePrompt(question, files);
-    return format("explore", await runCursor({ prompt, cwd, model, effort, mode }));
+  async ({ question, files, breadth, cwd, model, effort }) => {
+    const { prompt, mode } = explorePrompt(question, files, breadth);
+    return format("explore", await runCursor({ prompt, cwd, model: model ?? EXPLORE_MODEL, effort, mode }));
   },
 );
 

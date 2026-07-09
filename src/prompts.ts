@@ -47,26 +47,56 @@ export function runFilteredPrompt(command: string, want?: string): string {
 /** Modo read-only do Cursor para exploração. */
 export type ExploreMode = "plan" | "ask";
 
+/** Amplitude da varredura, espelhando o "medium" | "very thorough" do Explore do Claude Code. */
+export type ExploreBreadth = "medium" | "thorough";
+
 /**
- * explore: mapa geral do projeto (sem `files`) ou resposta escopada a arquivos
- * (com `files`), citando as linhas de código relevantes.
+ * explore: contraparte barata do Explore do Claude Code. Três modos:
+ *  - com `files` → responde uma pergunta escopada a eles, citando trechos com file:line;
+ *  - com `question` sem `files` → busca fan-out no repo (localizar/mapear), devolve a
+ *    conclusão + referências file:line (não despeja arquivos);
+ *  - sem nada → mapa geral do projeto.
+ * Porta as características do Explore nativo: varredura ampla, conclusão em vez de dump,
+ * localizar-não-revisar, e amplitude ajustável (`breadth`).
  */
-export function explorePrompt(question?: string, files?: string[]): { prompt: string; mode: ExploreMode } {
+export function explorePrompt(
+  question?: string,
+  files?: string[],
+  breadth: ExploreBreadth = "medium",
+): { prompt: string; mode: ExploreMode } {
   if (files?.length) {
     const q = question ?? "Summarize what these files do and how they fit together.";
     const prompt = [
       "Read these files and answer. Read-only — do not modify anything.",
-      "Quote the relevant code snippets inline with `file:line` so the answer is self-contained.",
+      "Locate and explain — do not review, audit, or judge the code.",
+      "Quote only the pivotal code snippets inline with `file:line` so the answer is self-contained; do not dump whole files.",
       "",
       `Files: ${files.join(", ")}`,
       `Question: ${q}`,
     ].join("\n");
     return { prompt, mode: "ask" };
   }
-  const focusLine = question
-    ? `Focus on: ${question}.`
-    : "Give a general map: top-level layout, main modules and their responsibilities, entry points, how to build/test/run, and notable conventions.";
-  const prompt = `Explore this project and produce a concise structured overview. Read-only — do not modify anything. ${focusLine} Cite concrete paths.`;
+  if (question) {
+    // Busca fan-out estilo Explore: varre amplo, segue convenções de nome, devolve refs.
+    const depth =
+      breadth === "thorough"
+        ? "Be exhaustive: sweep every plausible directory and naming convention (plural/singular, synonyms, mirror paths like controller/model/view); don't stop at the first hit."
+        : "Cast a reasonably wide net across the likely directories and naming conventions.";
+    const prompt = [
+      "Search this codebase to answer the question below. Read-only — do not modify anything.",
+      "Locate and map — do not review, audit, or judge the code.",
+      depth,
+      "Return a concise conclusion followed by concrete `file:line` references; quote only the pivotal lines, never whole files.",
+      "If the answer spans several places, list each with its `file:line`.",
+      "",
+      `Question: ${question}`,
+    ].join("\n");
+    return { prompt, mode: "plan" };
+  }
+  const prompt =
+    "Explore this project and produce a concise structured map. Read-only — do not modify anything. " +
+    "Give a general map: top-level layout, main modules and their responsibilities, entry points, how to " +
+    "build/test/run, and notable conventions. Cite concrete paths.";
   return { prompt, mode: "plan" };
 }
 

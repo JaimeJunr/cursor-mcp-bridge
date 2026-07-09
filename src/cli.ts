@@ -6,6 +6,13 @@ export const CURSOR_BIN = process.env.CURSOR_BIN ?? "agent";
 /** Modelo default: `auto` — o Cursor escolhe o mais barato/adequado. Override via CURSOR_BRIDGE_MODEL. */
 export const DEFAULT_MODEL = process.env.CURSOR_BRIDGE_MODEL ?? "auto";
 
+/**
+ * Modelo default do `explore`: composer-2.5, o modelo ágil/barato da Cursor — a exploração
+ * (busca fan-out, mapa) roda nele em vez de escalar o modelo caro do orquestrador. Override
+ * via CURSOR_BRIDGE_EXPLORE_MODEL. Só se aplica quando o chamador não passa `model` explícito.
+ */
+export const EXPLORE_MODEL = process.env.CURSOR_BRIDGE_EXPLORE_MODEL ?? "composer-2.5";
+
 /** Se truthy, passa --force (roda comandos sem prompt). Default off por segurança. */
 export const FORCE = ["1", "true", "yes"].includes((process.env.CURSOR_BRIDGE_FORCE ?? "").toLowerCase());
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — hook is plain .mjs sem types; só a lógica pura importa aqui.
-import { decide, buildAgentUpdatedInput, CURSOR_BRIDGE_MARKER } from "../hooks/prefer-cursor-bridge.mjs";
+import { decide, buildAgentUpdatedInput, sessionStartContext, CURSOR_BRIDGE_MARKER } from "../hooks/prefer-cursor-bridge.mjs";
 
 /** routeFn falso: imita o context-mode anexando seu bloco ao campo de prompt. */
 const CM_BLOCK = "\n\n<context_window_protection>CTX</context_window_protection>";
@@ -75,6 +75,59 @@ describe("decide — Read (threshold 300, dedup por arquivo)", () => {
   });
 });
 
+describe("sessionStartContext — preload injetado no início da sessão", () => {
+  it("instrui rodar ToolSearch com os nomes das tools deferidas", () => {
+    const text = sessionStartContext();
+    expect(text).toMatch(/ToolSearch/);
+    expect(text).toMatch(/mcp__cursor-bridge__read_slice/);
+    expect(text).toMatch(/mcp__cursor-bridge__explore/);
+  });
+
+  it("cobre o buraco do Bash grep: menciona preferir explore/read_slice sobre Read/Grep", () => {
+    const text = sessionStartContext();
+    expect(text).toMatch(/read_slice|explore/);
+    expect(text).toMatch(/Bash|Grep|Read/);
+  });
+
+  it("passa a filosofia orquestrador: offload de commit/PR/edição mecânica pro delegate", () => {
+    const text = sessionStartContext();
+    expect(text).toMatch(/delegate\(/);
+    expect(text).toMatch(/orchestrat/i);
+    expect(text).toMatch(/grunt|commits\b/i);
+  });
+
+  it("empurra explore() direto em vez de spawnar o subagente Explore (caro)", () => {
+    const text = sessionStartContext();
+    expect(text).toMatch(/explore\(/);
+    expect(text).toMatch(/Explore/); // o subagente nativo
+  });
+});
+
+describe("decide — Bash de mutação (grunt-work → delegate)", () => {
+  it("git commit → nudge delegate (com preload de carona na 1ª vez)", () => {
+    const res = decide({ tool_name: "Bash", tool_input: { command: "git commit -m 'x'" }, seen: new Set() });
+    expect(res.keys).toContain("bash-mutate");
+    expect(res.keys).toContain("preload");
+    expect(res.text).toMatch(/delegate/);
+  });
+
+  it("gh pr create → nudge delegate", () => {
+    const res = decide({ tool_name: "Bash", tool_input: { command: "gh pr create --fill" }, seen: new Set(["preload"]) });
+    expect(res.keys).toEqual(["bash-mutate"]);
+    expect(res.text).toMatch(/delegate/);
+  });
+
+  it("git status (read-only) → null (não cutuca; rtk já filtra)", () => {
+    const res = decide({ tool_name: "Bash", tool_input: { command: "git status --short" }, seen: new Set(["preload"]) });
+    expect(res).toBeNull();
+  });
+
+  it("segunda mutação na mesma sessão → null (dedup)", () => {
+    const res = decide({ tool_name: "Bash", tool_input: { command: "git push" }, seen: new Set(["bash-mutate", "preload"]) });
+    expect(res).toBeNull();
+  });
+});
+
 describe("buildAgentUpdatedInput — injeção no subagent", () => {
   it("preserva o bloco do context-mode E anexa a preferência cursor-bridge", () => {
     const res = buildAgentUpdatedInput({ prompt: "faça X" }, fakeRoute());
@@ -88,6 +141,18 @@ describe("buildAgentUpdatedInput — injeção no subagent", () => {
   it("idempotente: prompt já contém o marcador → null (não injeta 2×)", () => {
     const res = buildAgentUpdatedInput({ prompt: `oi ${CURSOR_BRIDGE_MARKER}` }, fakeRoute());
     expect(res).toBeNull();
+  });
+
+  it("subagent_type Explore → injeta reforço específico (tudo via cursor-bridge, composer)", () => {
+    const res = buildAgentUpdatedInput({ prompt: "ache X", subagent_type: "Explore" }, fakeRoute());
+    expect(res.prompt).toContain(CURSOR_BRIDGE_MARKER);
+    expect(res.prompt).toMatch(/Explore run|you are an explore/i);
+    expect(res.prompt).toMatch(/composer/i);
+  });
+
+  it("subagent comum (não-Explore) → NÃO leva o reforço de Explore", () => {
+    const res = buildAgentUpdatedInput({ prompt: "faça X", subagent_type: "general-purpose" }, fakeRoute());
+    expect(res.prompt).not.toMatch(/Explore run/i);
   });
 
   it("detecta o campo correto quando o subagent usa 'question' em vez de 'prompt'", () => {
