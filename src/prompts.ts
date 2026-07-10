@@ -84,6 +84,7 @@ export function explorePrompt(
         : "Cast a reasonably wide net across the likely directories and naming conventions.";
     const prompt = [
       "Search this codebase to answer the question below. Read-only — do not modify anything.",
+      "Answer the question directly — do NOT produce a plan, a task list, or next steps.",
       "Locate and map — do not review, audit, or judge the code.",
       depth,
       "Return a concise conclusion followed by concrete `file:line` references; quote only the pivotal lines, never whole files.",
@@ -91,13 +92,14 @@ export function explorePrompt(
       "",
       `Question: ${question}`,
     ].join("\n");
-    return { prompt, mode: "plan" };
+    return { prompt, mode: "ask" };
   }
   const prompt =
     "Explore this project and produce a concise structured map. Read-only — do not modify anything. " +
+    "Answer directly — do NOT produce a plan, a task list, or next steps. " +
     "Give a general map: top-level layout, main modules and their responsibilities, entry points, how to " +
     "build/test/run, and notable conventions. Cite concrete paths.";
-  return { prompt, mode: "plan" };
+  return { prompt, mode: "ask" };
 }
 
 /** web_lookup: consulta web/docs delegada ao Cursor (que tem acesso à web). */

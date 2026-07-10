@@ -113,15 +113,19 @@ server.registerTool(
   "follow_up",
   {
     description:
-      "Continue a previous Cursor session by session_id (returned by every other tool). The prior context lives on Cursor's side, so you don't resend it.",
+      "Continue a previous Cursor session by session_id (returned by every other tool). The prior context lives on Cursor's side, so you don't resend it. When continuing a read-only session (explore/read_slice/web_lookup), pass mode:'ask' to keep it read-only — otherwise the resumed run regains full tool access.",
     inputSchema: {
       session_id: z.string().describe("The session id returned by a previous cursor-mcp-bridge call."),
       question: z.string().describe("The follow-up question."),
+      mode: z
+        .enum(["plan", "ask"])
+        .optional()
+        .describe("Read-only mode to keep on the resumed session. Use 'ask' when continuing an explore/read_slice/web_lookup. Omit to continue a delegate with full tool access."),
       ...routing,
     },
   },
-  async ({ session_id, question, cwd, model, effort }) =>
-    format("follow_up", await runCursor({ prompt: question, resume: session_id, cwd, model, effort })),
+  async ({ session_id, question, mode, cwd, model, effort }) =>
+    format("follow_up", await runCursor({ prompt: question, resume: session_id, mode, cwd, model, effort })),
 );
 
 server.registerTool(

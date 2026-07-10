@@ -33,6 +33,9 @@ Four small modules under `src/`, each with a matching `test/*.test.ts`. The spli
   `routing` params (`cwd`/`model`/`effort`). `format()` appends the `session_id` footer and logs
   usage; `follow_up` feeds that id back as `RunOpts.resume` (`--resume`) so a prior Cursor session
   continues without resending its context — the footer and `follow_up` are two ends of the same loop.
+  `follow_up` takes an optional `mode` — without it, a resumed session regains full tool access, so
+  continuing a read-only session (`explore`/`read_slice`/`web_lookup`) must pass `mode:'ask'` to stay
+  read-only. The default (no mode) is for continuing a `delegate`.
 - `cli.ts` — the only module that touches the child process. `runCursor()` spawns `agent -p`;
   `buildCursorArgs()`, `resolveModel()`, `parseCliJson()` are **pure** and unit-tested. Keep the
   spawn boundary here — do not spawn from elsewhere.
@@ -43,10 +46,12 @@ Four small modules under `src/`, each with a matching `test/*.test.ts`. The spli
 
 ### Key invariants (violating these breaks tools or tests)
 
-- **Read-only modes are load-bearing for safety.** `explore` uses `plan`/`ask`, `read_slice` and
+- **Read-only modes are load-bearing for safety.** `explore`, `read_slice` and
   `web_lookup` use `ask` — passed via `RunOpts.mode` → `--mode`. `delegate` and `run_filtered`
   run with full tool access (and shell autonomy when `CURSOR_BRIDGE_FORCE=1`). Do not silently
-  change a read-only tool to run without a mode.
+  change a read-only tool to run without a mode. `explore` must use `ask`, never `plan`: `plan`
+  makes the Cursor worker emit an implementation plan ("vou formalizar no plano") instead of
+  answering the question — a real regression. `RunOpts.mode` keeps `"plan"` as a valid CLI value.
 - **`auto` ignores `effort`.** `resolveModel` only appends `[effort=...]` for non-`auto` models.
   `auto` is the default model (cheapest); keep it the default.
 - **`explore` defaults to `composer-2.5`, not `auto`.** `EXPLORE_MODEL` (env `CURSOR_BRIDGE_EXPLORE_MODEL`)

@@ -34,9 +34,9 @@ describe("runFilteredPrompt", () => {
 });
 
 describe("explorePrompt", () => {
-  it("uses plan mode and a general map when no files and no question", () => {
+  it("uses ask mode and a general map when no files and no question", () => {
     const { prompt, mode } = explorePrompt();
-    expect(mode).toBe("plan");
+    expect(mode).toBe("ask");
     expect(prompt).toMatch(/map|layout/i);
   });
 
@@ -48,13 +48,15 @@ describe("explorePrompt", () => {
     expect(prompt).toMatch(/snippet|file:line|relevant code/i);
   });
 
-  it("question without files → fan-out search (Explore-grade): file:line refs, locate-not-review", () => {
+  it("question without files → fan-out search (Explore-grade): ask mode, file:line refs, locate-not-review", () => {
     const { prompt, mode } = explorePrompt("where is the login handler defined");
-    expect(mode).toBe("plan");
+    expect(mode).toBe("ask");
     expect(prompt).toContain("where is the login handler defined");
     expect(prompt).toMatch(/file:line/i);
     expect(prompt).toMatch(/fan.?out|sweep|multiple|naming convention/i);
     expect(prompt).toMatch(/locate|do not (review|audit|judge)/i);
+    // Regressão: mode=plan fazia o worker "formalizar um plano" em vez de responder.
+    expect(prompt).toMatch(/answer (the question )?directly|do not (produce|write) a plan/i);
   });
 
   it("breadth 'thorough' pushes exhaustiveness harder than the default", () => {

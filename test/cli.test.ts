@@ -37,6 +37,14 @@ describe("buildCursorArgs", () => {
     const args = buildCursorArgs({ prompt: "more", resume: "s-9" });
     expect(args[args.indexOf("--resume") + 1]).toBe("s-9");
   });
+
+  it("keeps a read-only mode on a resumed session (follow_up of a read-only explore)", () => {
+    // Regressão: continuar uma sessão read-only (explore/read_slice/web_lookup) via
+    // follow_up sem --mode devolvia acesso total a ferramentas. O modo deve sobreviver ao resume.
+    const args = buildCursorArgs({ prompt: "more", resume: "s-9", mode: "ask" });
+    expect(args[args.indexOf("--resume") + 1]).toBe("s-9");
+    expect(args[args.indexOf("--mode") + 1]).toBe("ask");
+  });
 });
 
 describe("parseCliJson", () => {
