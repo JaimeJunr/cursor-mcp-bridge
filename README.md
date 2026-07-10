@@ -30,6 +30,10 @@ models; `auto` ignores it).
 
 ## Install
 
+> **Installing via an AI agent?** Point it at [`INSTALL.md`](INSTALL.md) — an agent-facing,
+> copy-paste guide that detects the host and registers the bridge in Claude Code, Cursor,
+> Codex, Grok, or any generic MCP host.
+
 ```bash
 git clone https://github.com/JaimeJunr/cursor-mcp-bridge.git
 cd cursor-mcp-bridge
