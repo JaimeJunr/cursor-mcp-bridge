@@ -44,6 +44,27 @@ Four small modules under `src/`, each with a matching `test/*.test.ts`. The spli
   contract usually means editing a prompt here (and its test), not `cli.ts`.
 - `usage.ts` — JSONL usage log behind `CURSOR_BRIDGE_LOG`; drives the `bridge_stats` tool.
 
+### The sandbox (default-on, in `cli.ts`)
+
+By default `runCursor` wraps the spawn in **bubblewrap (`bwrap`)** with an isolated `$HOME`, so the
+Cursor CLI can't load the user's global behavior config (`~/.cursor/rules`, `mcp.json`, `hooks.json`,
+`skills-cursor`, `cli-config.json`). That config was the real cost: it inflated every call to ~57k
+input tokens and made the CLI try to spin up the user's MCP servers on each run (the "hangs until
+timeout" symptom). Sandboxed, a trivial call drops to ~11k input tokens (−80%). Only auth
+(`~/.config/cursor/auth.json`) and toolchains (`~/.local`, `~/.nvm`, mise/sdkman, gradle/m2 caches)
+are bound in; the workspace (`cwd`) is bound RW as the last mount. Design points, all in `cli.ts`:
+
+- **`buildSandboxArgs(spec)` is pure and unit-tested** (like `buildCursorArgs`). Bind order is
+  load-bearing: `isoHome` mounts the empty `$HOME` **before** the HOME-subpath overlays (auth/
+  toolchain), and the `workspace` bind is **last** so it's never shadowed. `buildSandboxSpec` is the
+  impure half (mkdtemp + `existsSync` probing) — keep the fs/tmp side effects there.
+- **Default-on with graceful fallback.** `SANDBOX_ON` is true unless `CURSOR_BRIDGE_SANDBOX` is
+  `off`/`0`/`false`/`no`/empty. If `bwrap` isn't on PATH, it logs to stderr and runs unsandboxed
+  (never fails the call). The two ephemeral tmp dirs (iso-home, /tmp) are `cleanup()`-ed on
+  close/error/timeout.
+- The spawn boundary stays in `cli.ts` — the sandbox composes `bwrap <args> <CURSOR_BIN> <cursorArgs>`
+  in the single `spawn()`; don't spawn `bwrap` from elsewhere.
+
 ### Key invariants (violating these breaks tools or tests)
 
 - **Read-only modes are load-bearing for safety.** `explore`, `read_slice` and
@@ -54,9 +75,10 @@ Four small modules under `src/`, each with a matching `test/*.test.ts`. The spli
   answering the question — a real regression. `RunOpts.mode` keeps `"plan"` as a valid CLI value.
 - **`auto` ignores `effort`.** `resolveModel` only appends `[effort=...]` for non-`auto` models.
   `auto` is the default model (cheapest); keep it the default.
-- **`explore` defaults to `composer-2.5`, not `auto`.** `EXPLORE_MODEL` (env `CURSOR_BRIDGE_EXPLORE_MODEL`)
-  is applied in the `explore` handler as `model ?? EXPLORE_MODEL` — exploration runs on Cursor's cheap
-  composer model so it never escalates to the caller's expensive model. An explicit `model` still wins.
+- **`explore` defaults to `auto` via `EXPLORE_MODEL`.** `EXPLORE_MODEL` (env `CURSOR_BRIDGE_EXPLORE_MODEL`)
+  is applied in the `explore` handler as `model ?? EXPLORE_MODEL` — `auto` lets Cursor pick its cheap/fast
+  model (in practice composer) without pinning an id that can go slow/unavailable, so exploration never
+  escalates to the caller's expensive model. An explicit `model` still wins.
   `explore` also takes `breadth` (`medium`|`thorough`) → passed to `explorePrompt`; it LOCATES, never reviews.
 - **`read_slice` must return source lines, not just `file:line` prefixes** — this is an explicit
   instruction in `readSlicePrompt` and was a real regression (commit c41c2af). Preserve it.

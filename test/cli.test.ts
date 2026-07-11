@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildCursorArgs, parseCliJson, resolveModel } from "../src/cli.js";
+import { buildCursorArgs, buildSandboxArgs, parseCliJson, resolveModel, type SandboxSpec } from "../src/cli.js";
 
 describe("resolveModel", () => {
   it("defaults to auto", () => {
@@ -44,6 +44,57 @@ describe("buildCursorArgs", () => {
     const args = buildCursorArgs({ prompt: "more", resume: "s-9", mode: "ask" });
     expect(args[args.indexOf("--resume") + 1]).toBe("s-9");
     expect(args[args.indexOf("--mode") + 1]).toBe("ask");
+  });
+});
+
+describe("buildSandboxArgs", () => {
+  const spec: SandboxSpec = {
+    home: "/home/u",
+    user: "u",
+    path: "/home/u/.local/bin:/usr/bin",
+    lang: "C.UTF-8",
+    lcAll: "C.UTF-8",
+    isoHome: "/tmp/iso",
+    tmpDir: "/tmp/sbx",
+    workspace: "/repo",
+    systemRo: ["/usr", "/bin"],
+    homeRo: ["/home/u/.config/cursor/auth.json", "/home/u/.local"],
+    homeRw: ["/home/u/.gradle"],
+    extraEnv: [["HTTPS_PROXY", "http://proxy:8080"]],
+  };
+
+  it("monta o $HOME isolado ANTES dos binds de subpaths do HOME", () => {
+    const args = buildSandboxArgs(spec);
+    const isoHomeAt = args.indexOf("/tmp/iso");
+    const authAt = args.indexOf("/home/u/.config/cursor/auth.json");
+    expect(isoHomeAt).toBeGreaterThanOrEqual(0);
+    expect(authAt).toBeGreaterThan(isoHomeAt);
+  });
+
+  it("binda o workspace por último (após binds do HOME, antes do --setenv)", () => {
+    const args = buildSandboxArgs(spec);
+    // o bind RW do HOME (.gradle) precede o bind do workspace
+    const gradleBind = args.indexOf("/home/u/.gradle");
+    const setenv = args.indexOf("--setenv");
+    const wsBind = args.indexOf("--bind", gradleBind + 1);
+    expect(wsBind).toBeGreaterThan(gradleBind);
+    expect(wsBind).toBeLessThan(setenv);
+    expect(args[wsBind + 1]).toBe("/repo");
+    expect(args[wsBind + 2]).toBe("/repo");
+  });
+
+  it("isola HOME/USER/PATH via --setenv e preserva proxy do host", () => {
+    const args = buildSandboxArgs(spec);
+    expect(args[args.indexOf("HOME") + 1]).toBe("/home/u");
+    expect(args[args.indexOf("USER") + 1]).toBe("u");
+    expect(args[args.indexOf("HTTPS_PROXY") + 1]).toBe("http://proxy:8080");
+  });
+
+  it("aplica isolamento de namespaces e chdir no workspace", () => {
+    const args = buildSandboxArgs(spec);
+    expect(args).toContain("--unshare-pid");
+    expect(args).toContain("--die-with-parent");
+    expect(args[args.indexOf("--chdir") + 1]).toBe("/repo");
   });
 });
 

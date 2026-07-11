@@ -66,7 +66,8 @@ claude mcp add cursor-bridge -s user -- node /abs/path/to/cursor-mcp-bridge/dist
 |-----|---------|---------|
 | `CURSOR_BIN` | `agent` | Path to the Cursor CLI binary. |
 | `CURSOR_BRIDGE_MODEL` | `auto` | Default model when a call omits `model`. |
-| `CURSOR_BRIDGE_EXPLORE_MODEL` | `composer-2.5` | Model for `explore` when the call omits `model` — the cheap/fast Cursor model, so exploration never escalates to the orchestrator's expensive model. |
+| `CURSOR_BRIDGE_EXPLORE_MODEL` | `auto` | Model for `explore` when the call omits `model` — `auto` lets Cursor pick its cheap/fast model (in practice composer), so exploration never escalates to the orchestrator's expensive model. |
+| `CURSOR_BRIDGE_SANDBOX` | `bwrap` | Isolates the Cursor CLI in a bubblewrap sandbox with an empty `$HOME`, so it never loads the user's global config (`~/.cursor/rules`, `mcp.json`, `hooks.json`, skills) — cuts a trivial call from ~57k to ~11k input tokens and stops the CLI spinning up the user's MCP servers per run. Only auth + toolchains are bound in. Set `off`/`0` to disable; falls back to unsandboxed if `bwrap` is missing. |
 | `CURSOR_BRIDGE_FORCE` | _(off)_ | If `1`/`true`, pass `--force` so commands run without prompts. |
 | `CURSOR_BRIDGE_TIMEOUT_MS` | `600000` | Per-call timeout. |
 | `CURSOR_BRIDGE_LOG` | _(off)_ | Path to a JSONL file; when set, every call logs `{tool, outChars}` for `bridge_stats`. |
