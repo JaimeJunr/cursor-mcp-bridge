@@ -22,6 +22,7 @@ npx vitest run -t "resolveModel"  # single test by name
 ```
 
 There is no linter configured. `npm run build` (tsc, `strict: true`) is the type-check gate.
+`prepublishOnly` runs the build; only `dist/` is published (see `files` in `package.json`).
 
 ## Architecture
 
@@ -88,8 +89,9 @@ are bound in; the workspace (`cwd`) is bound RW as the last mount. Design points
 
 ## The hook (`hooks/prefer-cursor-bridge.mjs`)
 
-Ships separately from the server: a hook the host wires for `PreToolUse`
-(`Read|Grep|Glob|WebSearch|WebFetch|Bash` and `Agent|Task`) and for `SessionStart`. It nudges the
+Ships separately from the server: a hook the host wires (in its `settings.json`) as a `PreToolUse`
+matcher for `Read|Grep|Glob|WebSearch|WebFetch|Bash` and `Agent|Task`, plus a `SessionStart` entry —
+each pointing at `hooks/prefer-cursor-bridge.mjs`. It nudges the
 agent toward the bridge because these MCP tools are **deferred** (schemas load only via ToolSearch)
 and lose to always-loaded native tools by default. On `Bash` it only fires for artifact-writing
 commands (`git commit`/`push`, `git worktree add`, `gh pr create`, `bkt pr create`) — nudging that
@@ -132,7 +134,8 @@ imports the `.mjs` directly and injects fakes for fs and context-mode's route fu
 ## Conventions
 
 - ESM + TypeScript, Node16 module resolution. `dist/` and `node_modules/` are gitignored;
-  imports use `.js` extensions (Node16 requirement) even though sources are `.ts`.
+  imports use `.js` extensions (Node16 requirement) even though sources are `.ts`. Note "Node16"
+  is the TS `moduleResolution`, not the runtime — `package.json` `engines` requires Node `>=18`.
 - Comments are in Portuguese; code identifiers and prompt strings are in English. Match this.
 - Cross-cutting env vars are read once as module-level consts in `cli.ts`/`usage.ts` — add new
   config there, don't scatter `process.env` reads.
