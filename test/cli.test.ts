@@ -45,6 +45,18 @@ describe("buildCursorArgs", () => {
     expect(args[args.indexOf("--resume") + 1]).toBe("s-9");
     expect(args[args.indexOf("--mode") + 1]).toBe("ask");
   });
+
+  it("does not force tool approval by default", () => {
+    expect(buildCursorArgs({ prompt: "hi" })).not.toContain("--force");
+  });
+
+  it("forces tool approval when opts.force is set (web_lookup needs it or the web tool hangs)", () => {
+    // Regressão: em headless a web search fica esperando aprovação que nunca chega e leva
+    // timeout. --force auto-aprova a tool; mode:'ask' mantém o filesystem read-only.
+    const args = buildCursorArgs({ prompt: "search", mode: "ask", force: true });
+    expect(args).toContain("--force");
+    expect(args[args.indexOf("--mode") + 1]).toBe("ask");
+  });
 });
 
 describe("buildSandboxArgs", () => {

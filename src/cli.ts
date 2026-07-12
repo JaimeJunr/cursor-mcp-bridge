@@ -145,6 +145,8 @@ export interface RunOpts {
   resume?: string;
   /** read-only mode para discovery/analyze: "plan" | "ask". */
   mode?: "plan" | "ask";
+  /** Auto-aprova as tools deste run (--force), independente do env global. web_lookup precisa. */
+  force?: boolean;
   cwd?: string;
 }
 
@@ -167,7 +169,7 @@ export function buildCursorArgs(opts: RunOpts): string[] {
   const args = ["-p", "--output-format", "json", "--trust", "--model", resolveModel(opts.model, opts.effort)];
   if (opts.mode) args.push("--mode", opts.mode);
   if (opts.resume) args.push("--resume", opts.resume);
-  if (FORCE) args.push("--force");
+  if (FORCE || opts.force) args.push("--force");
   args.push(opts.prompt);
   return args;
 }

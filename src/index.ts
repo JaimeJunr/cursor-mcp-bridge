@@ -106,7 +106,9 @@ server.registerTool(
     inputSchema: { query: z.string().describe("What to look up on the web."), ...routing },
   },
   async ({ query, cwd, model, effort }) =>
-    format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, model, effort, mode: "ask" })),
+    // force: em headless a web search fica esperando aprovação que nunca chega e leva timeout;
+    // --force auto-aprova a tool, e mode:'ask' mantém o filesystem read-only.
+    format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, model, effort, mode: "ask", force: true })),
 );
 
 server.registerTool(
