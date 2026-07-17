@@ -44,13 +44,19 @@ server.registerTool(
         .min(1)
         .max(5)
         .describe("Task difficulty 1-5. 1=Composer 2.5 Fast, 2=Grok 4.5, 3=Grok 4.5 max, 4=GPT-5.6 Sol, 5=GPT-5.6 Sol max. Use the lowest level that fits."),
+      timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Max wall-clock ms for this delegation. Default 600000 (10 min). Raise for build-heavy tasks that run a test suite or build multiple times (e.g. a full TDD red→green→refactor with slow builds)."),
       ...routing,
     },
   },
   // O nível escolhe engine+modelo+effort (resolveTier). force: no sandbox o $HOME isolado tira o
   // "trusted" do cursor-agent e todo shell é rejeitado sem --force; grok/codex auto-aprovam por args.
   // `model`/`effort` explícitos do chamador ainda sobrepõem o tier.
-  async ({ prompt, level, cwd, model, effort }) => {
+  async ({ prompt, level, timeout_ms, cwd, model, effort }) => {
     const tier = resolveTier(level);
     return format(
       "delegate",
@@ -61,6 +67,7 @@ server.registerTool(
         model: model ?? tier.model,
         effort: effort ?? tier.effort,
         force: true,
+        timeoutMs: timeout_ms,
       }),
     );
   },

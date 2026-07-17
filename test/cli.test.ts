@@ -152,6 +152,19 @@ describe("buildCodexArgs", () => {
     expect(args[args.indexOf("-c") + 1]).toBe('model_reasoning_effort="medium"');
     expect(args.at(-1)).toBe("fix it"); // prompt é posicional no fim
   });
+
+  it("usa o subcomando resume com o id quando há resume", () => {
+    // resume do codex é subcomando: `codex exec resume [OPTIONS] <id> <prompt>`. buildCodexArgs
+    // ignorava opts.resume → follow_up começava sessão nova em vez de continuar.
+    const args = buildCodexArgs({ prompt: "more", model: "gpt-5.6-sol", resume: "uuid-1" });
+    expect(args[0]).toBe("exec");
+    expect(args[1]).toBe("resume");
+    expect(args).toContain("--json");
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    // posicionais no fim: <id> depois <prompt>
+    expect(args.at(-2)).toBe("uuid-1");
+    expect(args.at(-1)).toBe("more");
+  });
 });
 
 describe("resolveTier", () => {
@@ -212,5 +225,16 @@ describe("parseCodexJsonl", () => {
 
   it("degrada para texto cru quando não há agent_message", () => {
     expect(parseCodexJsonl("just noise\nno json here")).toEqual({ text: "just noise\nno json here", sessionId: undefined });
+  });
+
+  it("captura o thread_id do evento thread.started como sessionId", () => {
+    // o codex emite o id da sessão como `thread_id` no `thread.started`, não como `session_id`.
+    // sem isso o follow_up de um delegate 4-5 (codex) perdia a sessão.
+    const raw = [
+      JSON.stringify({ type: "thread.started", thread_id: "019f7049-22af-79a2" }),
+      JSON.stringify({ type: "item.completed", item: { id: "1", type: "agent_message", text: "PONG" } }),
+      JSON.stringify({ type: "turn.completed", usage: { output_tokens: 6 } }),
+    ].join("\n");
+    expect(parseCodexJsonl(raw)).toEqual({ text: "PONG", sessionId: "019f7049-22af-79a2" });
   });
 });

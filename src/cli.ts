@@ -200,6 +200,8 @@ export interface RunOpts {
   /** Auto-aprova as tools deste run (--force), independente do env global. web_lookup precisa. */
   force?: boolean;
   cwd?: string;
+  /** Timeout deste run (ms). Sobrepõe DEFAULT_TIMEOUT_MS — tarefas que rodam build precisam de mais. */
+  timeoutMs?: number;
 }
 
 /**
@@ -247,11 +249,12 @@ export function buildCodexArgs(opts: RunOpts): string[] {
   // --ignore-user-config: NÃO carrega ~/.codex/config.toml (que traz MCP servers externos — o codex
   // pendurava tentando conectá-los até timeout, subindo N processos). --ignore-rules: idem para .rules.
   // Auth continua via CODEX_HOME. Isso complementa o sandbox (defense-in-depth).
-  const args = ["exec", "--json", "--ignore-user-config", "--ignore-rules", "--dangerously-bypass-approvals-and-sandbox"];
-  if (opts.model) args.push("-m", opts.model);
-  if (opts.effort) args.push("-c", `model_reasoning_effort="${opts.effort}"`);
-  args.push(opts.prompt);
-  return args;
+  const flags = ["--json", "--ignore-user-config", "--ignore-rules", "--dangerously-bypass-approvals-and-sandbox"];
+  if (opts.model) flags.push("-m", opts.model);
+  if (opts.effort) flags.push("-c", `model_reasoning_effort="${opts.effort}"`);
+  // resume é subcomando próprio: `codex exec resume [OPTIONS] <id> <prompt>` (id e prompt posicionais).
+  if (opts.resume) return ["exec", "resume", ...flags, opts.resume, opts.prompt];
+  return ["exec", ...flags, opts.prompt];
 }
 
 /** Despacha a montagem de args pelo engine. */
@@ -298,9 +301,13 @@ export function parseCodexJsonl(raw: string): CliResult {
     const t = line.trim();
     if (!t.startsWith("{")) continue;
     try {
-      const ev = JSON.parse(t) as { item?: { type?: unknown; text?: unknown }; session_id?: unknown };
+      const ev = JSON.parse(t) as {
+        item?: { type?: unknown; text?: unknown }; session_id?: unknown; thread_id?: unknown;
+      };
       if (ev.item?.type === "agent_message" && typeof ev.item.text === "string") text = ev.item.text;
+      // o codex emite o id como `thread_id` no evento `thread.started`; `session_id` fica de fallback
       if (typeof ev.session_id === "string") sessionId = ev.session_id;
+      else if (typeof ev.thread_id === "string") sessionId = ev.thread_id;
     } catch { /* linha de log não-JSON — ignora */ }
   }
   return { text: text || raw.trim(), sessionId };
@@ -396,11 +403,12 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
 
     let stdout = "";
     let stderr = "";
+    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       cleanup();
-      reject(new Error(`${engine} agent timed out after ${DEFAULT_TIMEOUT_MS}ms: ${stderr.trim().slice(-500)}`));
-    }, DEFAULT_TIMEOUT_MS);
+      reject(new Error(`${engine} agent timed out after ${timeoutMs}ms: ${stderr.trim().slice(-500)}`));
+    }, timeoutMs);
 
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => {

@@ -59,6 +59,10 @@ The bridge drives three coding-agent CLIs, each with its own dialect and output 
   `--dangerously-bypass-approvals-and-sandbox`, plus `--ignore-user-config`/`--ignore-rules` so it
   never loads `~/.codex/config.toml` (whose MCP servers hung the CLI, spawning runaway `mcp-server`
   procs). `parseCliJson` is tolerant of cursor AND grok single-object shapes; codex uses the JSONL parser.
+  Session id: codex emits it as **`thread_id`** in the `thread.started` event (NOT `session_id`) —
+  `parseCodexJsonl` reads `thread_id` (with `session_id` as fallback), else `follow_up` on a level-4/5
+  delegate loses the session. Resume is a **subcommand**, not a flag: `buildCodexArgs` emits
+  `exec resume <id> <prompt>` when `opts.resume` is set (cursor uses `--resume`, grok `-r`).
 
 `delegate` takes a required `level` (1-5) → `resolveTier` maps difficulty to (engine, model, effort),
 escalating: 1=`composer-2.5[fast=true]` (cursor), 2=Grok 4.5 medium, 3=Grok 4.5 high, 4=GPT-5.6 Sol
