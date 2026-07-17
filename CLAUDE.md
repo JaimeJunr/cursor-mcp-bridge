@@ -37,28 +37,65 @@ Four small modules under `src/`, each with a matching `test/*.test.ts`. The spli
   `follow_up` takes an optional `mode` — without it, a resumed session regains full tool access, so
   continuing a read-only session (`explore`/`read_slice`/`web_lookup`) must pass `mode:'ask'` to stay
   read-only. The default (no mode) is for continuing a `delegate`.
-- `cli.ts` — the only module that touches the child process. `runCursor()` spawns `agent -p`;
-  `buildCursorArgs()`, `resolveModel()`, `parseCliJson()` are **pure** and unit-tested. Keep the
-  spawn boundary here — do not spawn from elsewhere.
+- `cli.ts` — the only module that touches the child process. `runCursor()` spawns the engine's CLI;
+  `buildCursorArgs()`/`buildGrokArgs()`/`buildCodexArgs()` (+ `buildArgs` dispatcher), `resolveModel()`,
+  `parseCliJson()`/`parseCodexJsonl()` (+ `parseOutput` dispatcher), `resolveTier()`, `hasEngine()`,
+  `binExists()` are **pure** and unit-tested. Keep the spawn boundary here — do not spawn from elsewhere.
+
+### Engines & tiers (multi-CLI)
+
+The bridge drives three coding-agent CLIs, each with its own dialect and output format — `RunOpts.engine`
+(`"cursor"|"grok"|"codex"`) selects one. Never use `auto` anywhere: the default model is
+`composer-2.5[fast=true]` (the Fast bracket is load-bearing — the user pays for Fast explicitly).
+
+- **cursor** (`cursor-agent`) — default for every read/filter tool. `CURSOR_BIN` default is
+  `cursor-agent`, NOT `agent` (in the user's PATH `agent` is the grok binary; the old default only
+  "worked" because the sandbox hid `~/.grok/bin`). Dialect: `-p <prompt>` positional, `--trust`,
+  effort baked into the model bracket, `--force`. Output `{result, session_id}`.
+- **grok** (`grok`) — dialect: prompt is the VALUE of `--single`, `--reasoning-effort` is a separate
+  flag, autonomy is `--always-approve` (not `--force`). Output `{text, sessionId}`.
+- **codex** (`codex exec`) — dialect: `exec` subcommand, JSONL output (`--json`, parsed by
+  `parseCodexJsonl` → last `agent_message`), effort via `-c model_reasoning_effort=`, autonomy via
+  `--dangerously-bypass-approvals-and-sandbox`, plus `--ignore-user-config`/`--ignore-rules` so it
+  never loads `~/.codex/config.toml` (whose MCP servers hung the CLI, spawning runaway `mcp-server`
+  procs). `parseCliJson` is tolerant of cursor AND grok single-object shapes; codex uses the JSONL parser.
+
+`delegate` takes a required `level` (1-5) → `resolveTier` maps difficulty to (engine, model, effort),
+escalating: 1=`composer-2.5[fast=true]` (cursor), 2=Grok 4.5 medium, 3=Grok 4.5 high, 4=GPT-5.6 Sol
+medium, 5=GPT-5.6 Sol high. **Fallback rule ("use grok/codex if installed, else cursor-agent"):** when
+the preferred CLI is absent/disabled, the tier falls back to the equivalent model on `cursor-agent`
+(`cursor-grok-4.5-high-fast`, `gpt-5.6-sol-high-fast`/`-xhigh-fast`). `hasEngine` injects the `has`
+predicate into `resolveTier` for testability.
 - `prompts.ts` — pure prompt builders (`readSlicePrompt`, `runFilteredPrompt`, `explorePrompt`,
   `webLookupPrompt`). The tools' behavior lives in these prompt strings, so changing a tool's
   contract usually means editing a prompt here (and its test), not `cli.ts`.
 - `usage.ts` — JSONL usage log behind `CURSOR_BRIDGE_LOG`; drives the `bridge_stats` tool.
 
-### The sandbox (default-on, in `cli.ts`)
+### The sandbox (default-on, mandatory for cursor & grok, in `cli.ts`)
 
-By default `runCursor` wraps the spawn in **bubblewrap (`bwrap`)** with an isolated `$HOME`, so the
-Cursor CLI can't load the user's global behavior config (`~/.cursor/rules`, `mcp.json`, `hooks.json`,
-`skills-cursor`, `cli-config.json`). That config was the real cost: it inflated every call to ~57k
-input tokens and made the CLI try to spin up the user's MCP servers on each run (the "hangs until
-timeout" symptom). Sandboxed, a trivial call drops to ~11k input tokens (−80%). Only auth
-(`~/.config/cursor/auth.json`) and toolchains (`~/.local`, `~/.nvm`, mise/sdkman, gradle/m2 caches)
-are bound in; the workspace (`cwd`) is bound RW as the last mount. Design points, all in `cli.ts`:
+`runCursor` wraps the spawn in **bubblewrap (`bwrap`)** with an isolated `$HOME`, so each CLI can't
+load the user's global behavior config (`~/.cursor/rules`, `~/.grok/config.toml`, `mcp.json`, hooks,
+skills). That config was the real cost: it inflated every call to ~57k input tokens and made the CLI
+try to spin up the user's MCP servers on each run (the "hangs until timeout" symptom). Sandboxed, a
+trivial call drops to ~11k input tokens (−80%). Only auth + toolchains are bound in; the workspace
+(`cwd`) is bound RW as the last mount. Per-engine HOME binds are declared in `SANDBOX_ENGINE_RO`
+(grok needs `~/.grok/{bin,downloads,bundled,vendor,auth.json,agent_id}`) and `SANDBOX_ENGINE_RW`
+(codex needs `~/.codex` RW for its state/cache/socket). Design points, all in `cli.ts`:
 
+- **The codex is the exception — it does NOT run in the sandbox.** Its models-manager subprocess
+  times out and the app-server socket / `chatgpt.com` DNS break inside the bwrap namespace. So codex
+  is gated behind `CURSOR_BRIDGE_CODEX=1` (default off) and, when enabled, runs UNSANDBOXED (with a
+  stderr warning). While off, `hasEngine("codex")` is false and tiers 4-5 fall back to GPT-5.6 Sol on
+  `cursor-agent` (which sandboxes fine) — this keeps "every model in the sandbox" true by default.
 - **`buildSandboxArgs(spec)` is pure and unit-tested** (like `buildCursorArgs`). Bind order is
   load-bearing: `isoHome` mounts the empty `$HOME` **before** the HOME-subpath overlays (auth/
-  toolchain), and the `workspace` bind is **last** so it's never shadowed. `buildSandboxSpec` is the
-  impure half (mkdtemp + `existsSync` probing) — keep the fs/tmp side effects there.
+  toolchain), and the `workspace` bind is **last** so it's never shadowed. `buildSandboxSpec(workspace,
+  engine)` is the impure half (mkdtemp + `existsSync` probing) — keep the fs/tmp side effects there.
+- **Only `cwd` is mounted — paths outside it are invisible.** A command touching a sibling path
+  (additional working dir, adjacent monorepo) fails with `No such file or directory`. Mount extras
+  RW via `CURSOR_BRIDGE_SANDBOX_EXTRA` (`:`-separated absolute paths); `buildSandboxSpec` keeps only
+  the ones that exist and aren't the workspace, and `buildSandboxArgs` binds them **after** the HOME
+  overlays but **before** the workspace, so the workspace stays the last (never-shadowed) bind.
 - **Default-on with graceful fallback.** `SANDBOX_ON` is true unless `CURSOR_BRIDGE_SANDBOX` is
   `off`/`0`/`false`/`no`/empty. If `bwrap` isn't on PATH, it logs to stderr and runs unsandboxed
   (never fails the call). The two ephemeral tmp dirs (iso-home, /tmp) are `cleanup()`-ed on
@@ -69,9 +106,15 @@ are bound in; the workspace (`cwd`) is bound RW as the last mount. Design points
 ### Key invariants (violating these breaks tools or tests)
 
 - **Read-only modes are load-bearing for safety.** `explore`, `read_slice` and
-  `web_lookup` use `ask` — passed via `RunOpts.mode` → `--mode`. `delegate` and `run_filtered`
-  run with full tool access (and shell autonomy when `CURSOR_BRIDGE_FORCE=1`). Do not silently
-  change a read-only tool to run without a mode. `explore` must use `ask`, never `plan`: `plan`
+  `web_lookup` use `ask` — passed via `RunOpts.mode` → `--mode`. **`delegate`, `run_filtered` and
+  `follow_up` always force** (`force: true`): inside the sandbox (default-on) the isolated `$HOME`
+  strips the cursor-agent's "trusted" state, so *every* shell invocation is rejected without
+  `--force` ("every Shell invocation is being rejected by the environment", even `echo`). These
+  tools run shell, so they must auto-approve; the sandbox contains the blast radius to `cwd`. With
+  `CURSOR_BRIDGE_SANDBOX=off` this auto-approves against the real `$HOME` — that's the accepted
+  trade-off. `CURSOR_BRIDGE_FORCE=1` still force-enables globally. `explore`/`read_slice` stay
+  force-free: file reads under `ask` are auto-permitted in the sandbox; only shell needs `--force`.
+  Do not silently change a read-only tool to run without a mode. `explore` must use `ask`, never `plan`: `plan`
   makes the Cursor worker emit an implementation plan ("vou formalizar no plano") instead of
   answering the question — a real regression. `RunOpts.mode` keeps `"plan"` as a valid CLI value.
 - **`auto` ignores `effort`.** `resolveModel` only appends `[effort=...]` for non-`auto` models.

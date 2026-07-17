@@ -2,7 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { runCursor, EXPLORE_MODEL, type CliResult } from "./cli.js";
+import { runCursor, EXPLORE_MODEL, resolveTier, type CliResult } from "./cli.js";
 import { readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt } from "./prompts.js";
 import { logUsage, readUsage, aggregate } from "./usage.js";
 
@@ -35,10 +35,35 @@ server.registerTool(
   "delegate",
   {
     description:
-      "Delegate a task to the Cursor CLI agent running headless (agent -p) — the cheap/fast worker with full tool access (read, edit, shell) in cwd. As the orchestrator, offload grunt-work here instead of spending your own expensive tokens: commits, opening/updating PRs, writing tickets/comments, small mechanical or 2-line edits, running a build/test and fixing it, and routine implementation where a cheaper model is enough. Give a complete, self-contained instruction — Cursor does not see your context.",
-    inputSchema: { prompt: z.string().describe("The complete task prompt for the Cursor agent."), ...routing },
+      "Delegate a task to a headless coding-agent CLI — the cheap/fast worker with full tool access (read, edit, shell) in cwd. As the orchestrator, offload grunt-work here instead of spending your own expensive tokens: commits, opening/updating PRs, writing tickets/comments, small mechanical or 2-line edits, running a build/test and fixing it, and routine implementation. The `level` (1-5) picks the model by task difficulty: 1=Composer 2.5 Fast (cheapest), 2=Grok 4.5, 3=Grok 4.5 (max effort), 4=GPT-5.6 Sol, 5=GPT-5.6 Sol (max effort). Pick the lowest level that can do the job. Give a complete, self-contained instruction — the worker does not see your context.",
+    inputSchema: {
+      prompt: z.string().describe("The complete task prompt for the worker agent."),
+      level: z
+        .number()
+        .int()
+        .min(1)
+        .max(5)
+        .describe("Task difficulty 1-5. 1=Composer 2.5 Fast, 2=Grok 4.5, 3=Grok 4.5 max, 4=GPT-5.6 Sol, 5=GPT-5.6 Sol max. Use the lowest level that fits."),
+      ...routing,
+    },
   },
-  async ({ prompt, cwd, model, effort }) => format("delegate", await runCursor({ prompt, cwd, model, effort })),
+  // O nível escolhe engine+modelo+effort (resolveTier). force: no sandbox o $HOME isolado tira o
+  // "trusted" do cursor-agent e todo shell é rejeitado sem --force; grok/codex auto-aprovam por args.
+  // `model`/`effort` explícitos do chamador ainda sobrepõem o tier.
+  async ({ prompt, level, cwd, model, effort }) => {
+    const tier = resolveTier(level);
+    return format(
+      "delegate",
+      await runCursor({
+        prompt,
+        cwd,
+        engine: tier.engine,
+        model: model ?? tier.model,
+        effort: effort ?? tier.effort,
+        force: true,
+      }),
+    );
+  },
 );
 
 server.registerTool(
@@ -95,7 +120,10 @@ server.registerTool(
     },
   },
   async ({ command, want, cwd, model, effort }) =>
-    format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, model, effort })),
+    // force: em headless o comando shell fica esperando aprovação que nunca chega e é rejeitado
+    // pelo ambiente ("O comando foi rejeitado pelo ambiente"); --force auto-aprova. Rodar o
+    // comando É o propósito do tool, então sempre auto-aprovamos (mesmo trade-off do web_lookup).
+    format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, model, effort, force: true })),
 );
 
 server.registerTool(
@@ -126,8 +154,10 @@ server.registerTool(
       ...routing,
     },
   },
+  // force: mesma razão do delegate — ao continuar uma sessão que roda shell (delegate/run_filtered),
+  // o sandbox rejeita todo comando sem --force. mode:'ask' (quando passado) mantém o filesystem read-only.
   async ({ session_id, question, mode, cwd, model, effort }) =>
-    format("follow_up", await runCursor({ prompt: question, resume: session_id, mode, cwd, model, effort })),
+    format("follow_up", await runCursor({ prompt: question, resume: session_id, mode, cwd, model, effort, force: true })),
 );
 
 server.registerTool(

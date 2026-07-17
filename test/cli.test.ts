@@ -1,13 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { buildCursorArgs, buildSandboxArgs, parseCliJson, resolveModel, type SandboxSpec } from "../src/cli.js";
+import {
+  buildCursorArgs, buildGrokArgs, buildCodexArgs, buildSandboxArgs,
+  parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
+  type SandboxSpec, type Engine,
+} from "../src/cli.js";
 
 describe("resolveModel", () => {
-  it("defaults to auto", () => {
-    expect(resolveModel()).toBe("auto");
+  it("defaults to Composer 2.5 Fast (nunca auto)", () => {
+    expect(resolveModel()).toBe("composer-2.5[fast=true]");
   });
 
   it("ignores effort for auto (auto takes no bracket override)", () => {
-    expect(resolveModel(undefined, "high")).toBe("auto");
     expect(resolveModel("auto", "high")).toBe("auto");
   });
 
@@ -24,7 +27,7 @@ describe("buildCursorArgs", () => {
   it("runs headless json with trust and a resolved model", () => {
     const args = buildCursorArgs({ prompt: "hi" });
     expect(args.slice(0, 4)).toEqual(["-p", "--output-format", "json", "--trust"]);
-    expect(args[args.indexOf("--model") + 1]).toBe("auto");
+    expect(args[args.indexOf("--model") + 1]).toBe("composer-2.5[fast=true]");
     expect(args.at(-1)).toBe("hi");
   });
 
@@ -72,6 +75,7 @@ describe("buildSandboxArgs", () => {
     systemRo: ["/usr", "/bin"],
     homeRo: ["/home/u/.config/cursor/auth.json", "/home/u/.local"],
     homeRw: ["/home/u/.gradle"],
+    extraBinds: ["/mnt/extra"],
     extraEnv: [["HTTPS_PROXY", "http://proxy:8080"]],
   };
 
@@ -83,16 +87,26 @@ describe("buildSandboxArgs", () => {
     expect(authAt).toBeGreaterThan(isoHomeAt);
   });
 
-  it("binda o workspace por último (após binds do HOME, antes do --setenv)", () => {
+  it("binda o workspace por último (após binds do HOME e extras, antes do --setenv)", () => {
     const args = buildSandboxArgs(spec);
-    // o bind RW do HOME (.gradle) precede o bind do workspace
-    const gradleBind = args.indexOf("/home/u/.gradle");
     const setenv = args.indexOf("--setenv");
-    const wsBind = args.indexOf("--bind", gradleBind + 1);
-    expect(wsBind).toBeGreaterThan(gradleBind);
-    expect(wsBind).toBeLessThan(setenv);
-    expect(args[wsBind + 1]).toBe("/repo");
-    expect(args[wsBind + 2]).toBe("/repo");
+    // o último --bind antes do --setenv é o workspace, nunca sobreposto
+    let lastBind = -1;
+    for (let i = 0; i < setenv; i++) if (args[i] === "--bind") lastBind = i;
+    expect(args[lastBind + 1]).toBe("/repo");
+    expect(args[lastBind + 2]).toBe("/repo");
+  });
+
+  it("monta os binds extras RW depois dos binds do HOME e antes do workspace", () => {
+    const args = buildSandboxArgs(spec);
+    const gradleBind = args.indexOf("/home/u/.gradle");
+    const extraAt = args.indexOf("/mnt/extra");
+    const wsBind = args.lastIndexOf("/repo");
+    expect(extraAt).toBeGreaterThan(gradleBind);
+    expect(extraAt).toBeLessThan(wsBind);
+    // é um --bind RW (path duplicado: source e dest iguais)
+    expect(args[extraAt - 1]).toBe("--bind");
+    expect(args[extraAt + 1]).toBe("/mnt/extra");
   });
 
   it("isola HOME/USER/PATH via --setenv e preserva proxy do host", () => {
@@ -110,13 +124,93 @@ describe("buildSandboxArgs", () => {
   });
 });
 
+describe("buildGrokArgs", () => {
+  it("passa o prompt como valor de --single e usa flags próprias do grok", () => {
+    const args = buildGrokArgs({ prompt: "do it", model: "grok-4.5", effort: "high" });
+    expect(args[args.indexOf("--single") + 1]).toBe("do it");
+    expect(args).toContain("--output-format");
+    expect(args[args.indexOf("-m") + 1]).toBe("grok-4.5");
+    expect(args[args.indexOf("--reasoning-effort") + 1]).toBe("high");
+    expect(args).toContain("--always-approve"); // autonomia é --always-approve, não --force
+    expect(args).not.toContain("--trust");
+  });
+
+  it("adiciona -r no resume", () => {
+    const args = buildGrokArgs({ prompt: "more", model: "grok-4.5", resume: "g-1" });
+    expect(args[args.indexOf("-r") + 1]).toBe("g-1");
+  });
+});
+
+describe("buildCodexArgs", () => {
+  it("usa o subcomando exec, --json e bypass de aprovação", () => {
+    const args = buildCodexArgs({ prompt: "fix it", model: "gpt-5.6-sol", effort: "medium" });
+    expect(args[0]).toBe("exec");
+    expect(args).toContain("--json");
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args[args.indexOf("-m") + 1]).toBe("gpt-5.6-sol");
+    // effort é config override, não flag
+    expect(args[args.indexOf("-c") + 1]).toBe('model_reasoning_effort="medium"');
+    expect(args.at(-1)).toBe("fix it"); // prompt é posicional no fim
+  });
+});
+
+describe("resolveTier", () => {
+  const all: (e: Engine) => boolean = () => true;
+  const none: (e: Engine) => boolean = (e) => e === "cursor";
+
+  it("nível 1 é sempre Composer 2.5 Fast no cursor-agent", () => {
+    expect(resolveTier(1, all)).toEqual({ engine: "cursor", model: "composer-2.5[fast=true]" });
+  });
+
+  it("níveis 2/3 usam Grok 4.5 com effort crescente quando o grok existe", () => {
+    expect(resolveTier(2, all)).toEqual({ engine: "grok", model: "grok-4.5", effort: "medium" });
+    expect(resolveTier(3, all)).toEqual({ engine: "grok", model: "grok-4.5", effort: "high" });
+  });
+
+  it("níveis 4/5 usam GPT-5.6 Sol no codex com effort crescente", () => {
+    expect(resolveTier(4, all)).toEqual({ engine: "codex", model: "gpt-5.6-sol", effort: "medium" });
+    expect(resolveTier(5, all)).toEqual({ engine: "codex", model: "gpt-5.6-sol", effort: "high" });
+  });
+
+  it("cai para o cursor-agent quando grok/codex não estão instalados", () => {
+    expect(resolveTier(3, none)).toEqual({ engine: "cursor", model: "cursor-grok-4.5-high-fast" });
+    expect(resolveTier(5, none)).toEqual({ engine: "cursor", model: "gpt-5.6-sol-xhigh-fast" });
+  });
+
+  it("rejeita nível fora de 1-5", () => {
+    expect(() => resolveTier(0, all)).toThrow(/expected integer 1-5/);
+    expect(() => resolveTier(6, all)).toThrow(/expected integer 1-5/);
+  });
+});
+
 describe("parseCliJson", () => {
-  it("extracts result and session_id", () => {
+  it("extracts result and session_id (cursor)", () => {
     const raw = JSON.stringify({ type: "result", result: "PONG", session_id: "s-1" });
     expect(parseCliJson(raw)).toEqual({ text: "PONG", sessionId: "s-1" });
   });
 
+  it("extracts text and sessionId (grok)", () => {
+    const raw = JSON.stringify({ text: "PONG", sessionId: "g-1", stopReason: "EndTurn" });
+    expect(parseCliJson(raw)).toEqual({ text: "PONG", sessionId: "g-1" });
+  });
+
   it("falls back to raw text on non-json", () => {
     expect(parseCliJson("plain")).toEqual({ text: "plain" });
+  });
+});
+
+describe("parseCodexJsonl", () => {
+  it("pega o último agent_message ignorando logs e outros eventos", () => {
+    const raw = [
+      "2026-07-16T23:08:40Z ERROR some noisy log line",
+      JSON.stringify({ type: "item.completed", item: { id: "1", type: "error", message: "skill trimmed" } }),
+      JSON.stringify({ type: "item.completed", item: { id: "2", type: "agent_message", text: "PONG" } }),
+      JSON.stringify({ type: "turn.completed", usage: { output_tokens: 6 } }),
+    ].join("\n");
+    expect(parseCodexJsonl(raw)).toEqual({ text: "PONG", sessionId: undefined });
+  });
+
+  it("degrada para texto cru quando não há agent_message", () => {
+    expect(parseCodexJsonl("just noise\nno json here")).toEqual({ text: "just noise\nno json here", sessionId: undefined });
   });
 });
