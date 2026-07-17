@@ -96,6 +96,17 @@ describe("sessionStartContext — preload injetado no início da sessão", () =>
     expect(text).toMatch(/grunt|commits\b/i);
   });
 
+  it("enquadra delegate como executor E juiz (level 4-5 = Sol), Task só pra subagent especializado", () => {
+    const text = sessionStartContext();
+    expect(text).toMatch(/delegate\(prompt, level\)/);
+    expect(text).toMatch(/DEFAULT/);
+    // delegate cobre julgamento também, via o tier alto (GPT-5.6 Sol)
+    expect(text).toMatch(/judgment/i);
+    expect(text).toMatch(/4-5|Sol/);
+    // Task fica só pra subagent com toolset próprio, não pra julgamento genérico
+    expect(text).toMatch(/specialized|toolset/i);
+  });
+
   it("empurra explore() direto em vez de spawnar o subagente Explore (caro)", () => {
     const text = sessionStartContext();
     expect(text).toMatch(/explore\(/);
@@ -124,6 +135,32 @@ describe("decide — Bash de mutação (grunt-work → delegate)", () => {
 
   it("segunda mutação na mesma sessão → null (dedup)", () => {
     const res = decide({ tool_name: "Bash", tool_input: { command: "git push" }, seen: new Set(["bash-mutate", "preload"]) });
+    expect(res).toBeNull();
+  });
+});
+
+describe("decide — Edit/Write (execução self-contained → delegate)", () => {
+  it("primeira Edit → nudge delegate(level) (com preload de carona)", () => {
+    const res = decide({ tool_name: "Edit", tool_input: { file_path: "/x/a.ts" }, seen: new Set() });
+    expect(res.keys).toContain("edit-delegate");
+    expect(res.keys).toContain("preload");
+    expect(res.text).toMatch(/delegate\(/);
+    expect(res.text).toMatch(/level/);
+  });
+
+  it("Write também dispara o mesmo nudge", () => {
+    const res = decide({ tool_name: "Write", tool_input: { file_path: "/x/n.ts" }, seen: new Set(["preload"]) });
+    expect(res.keys).toEqual(["edit-delegate"]);
+    expect(res.text).toMatch(/delegate\(/);
+  });
+
+  it("MultiEdit também dispara", () => {
+    const res = decide({ tool_name: "MultiEdit", tool_input: { file_path: "/x/m.ts" }, seen: new Set(["preload"]) });
+    expect(res.keys).toEqual(["edit-delegate"]);
+  });
+
+  it("segunda edição na mesma sessão → null (dedup, não cutuca toda edição)", () => {
+    const res = decide({ tool_name: "Edit", tool_input: { file_path: "/x/b.ts" }, seen: new Set(["edit-delegate", "preload"]) });
     expect(res).toBeNull();
   });
 });

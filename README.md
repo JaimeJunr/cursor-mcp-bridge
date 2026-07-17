@@ -12,7 +12,7 @@ cheapest adequate model).
 
 | Tool | Purpose |
 |------|---------|
-| `delegate` | Run a task on the Cursor agent with full tool access in `cwd`. |
+| `delegate` | Run a task on the Cursor agent with full **read/edit/shell** access in `cwd` — the fleet's *worker*, for both execution and judgment. Takes a required `level` (1-5) that escalates difficulty→engine: `1`=`composer` (cursor, cheap; the default tier), `2`/`3`=Grok 4.5 medium/high, `4`/`5`=GPT-5.6 Sol medium/high (codex, top-quality — capable enough to *judge*: code review, impact analysis, hard debugging). Note the cost order is roughly `composer < Opus < Sol high`, so `level 4-5` is premium: reach for it for **quality**, not to save tokens. Hand it self-contained implementation, grunt-work, **or high-stakes judgment** — the constant win is context economy (the worker's raw output never enters your context); you review the result. |
 | `explore` | Read-only exploration, the cheap Explore (runs on Cursor's `composer` model). `question` alone → broad fan-out search returning `file:line` refs; `question`+`files` → answer about those files; neither → general project map. `breadth: "thorough"` sweeps wider. Locates, does not review. Prefer it over spawning the Explore subagent. |
 | `read_slice` | Surgical read-only read: returns ONLY the code relevant to `want` (exact lines with `file:line`) from the given `files` — the full file never enters your context. Use instead of reading large files whole. |
 | `run_filtered` | Run a shell `command` and get back ONLY the lines relevant to `want` — semantic filtering of huge build/test/log output. |
@@ -21,7 +21,8 @@ cheapest adequate model).
 | `bridge_stats` | Report calls and chars returned to context per tool (needs `CURSOR_BRIDGE_LOG`). |
 
 Every tool accepts: `cwd`, `model` (default `auto`), `effort` (applied only to parameterized
-models; `auto` ignores it).
+models; `auto` ignores it). `delegate` additionally takes a **required `level`** (1-5) that
+picks the engine/model tier (see the table above); the explicit `model`/`effort` still override it.
 
 ## Requirements
 
@@ -98,7 +99,7 @@ settings (Claude Code `settings.json`):
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|Grep|Glob|WebSearch|WebFetch|Bash",
+        "matcher": "Read|Grep|Glob|WebSearch|WebFetch|Bash|Edit|Write|MultiEdit",
         "hooks": [
           { "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-cursor-bridge.mjs", "timeout": 5 }
         ]
@@ -121,6 +122,11 @@ to ignore it *and* every fire costs tokens.
 >   `gh pr create`, `gh issue create`, `bkt pr create`) → suggests offloading that grunt-work to
 >   `delegate` (once). Read-only Bash (status/diff/log/checkout) is left alone — the orchestrator
 >   needs that state, and a mechanical filter (e.g. rtk) already trims the noise.
+> - **`Edit`/`Write`/`MultiEdit`** → once per session, reminds that a *self-contained* task
+>   (feature, bugfix, mechanical multi-file change, build fix) can go **whole** to `delegate(prompt, level)`
+>   — the Cursor worker edits with full access on a cheap model — instead of the orchestrator implementing
+>   it on expensive tokens. It never blocks the edit; the once-per-session dedup means the orchestrator
+>   still edits inline freely (the nudge repositions execution, it doesn't police every edit).
 > - The **first** qualifying nudge of the session (whichever tool triggers it) also carries
 >   that preload reminder, so the schemas get loaded even in a Read-only or web-only session.
 
@@ -198,6 +204,24 @@ The host rule "prefer dedicated file/search tools" applies to the EDIT path (Edi
 file content → native Read). For PURE reading/locating/web (no edit), cursor-bridge takes
 precedence over native Read/Grep/Glob/WebSearch/WebFetch. Read a large file whole with native
 Read ONLY when you are about to edit it.
+```
+
+**4. Delegate execution, not just exploration.** The bridge is not only for reading — `delegate`
+runs implementation work with full read/edit/shell access, so the orchestrator shouldn't burn its
+own tokens on self-contained tasks. State this in `CLAUDE.md` so the agent routes *doing*, not just
+*finding*, to the cheap worker:
+
+```
+You are the ORCHESTRATOR. delegate(prompt, level) is the DEFAULT for BOTH execution AND judgment.
+`level` picks the tier: 1=cheap composer (mechanical work — features, bugfixes, multi-file edits,
+commits/PRs/tickets, build fixes), 4-5=GPT-5.6 Sol, top-quality (real reasoning — code review with
+a verdict, cross-file impact analysis, hard debugging). The Cursor worker has full read/edit/shell
+access in cwd, so cursor is NOT read-only when you delegate. Cost order is roughly composer < Opus
+< Sol high, so level 4-5 is PRICIER than doing it on your own model — reach for it for quality, not
+to save tokens; the constant win of delegating is context economy (the worker's raw output never
+enters your context). Delegate it, then review the result; edit inline only for a quick one-off
+you're already positioned for. Only spawn a Task subagent when you need a SPECIALIZED agent with its
+own toolset (e.g. Playwright/MCP-backed reviewers).
 ```
 
 ## Develop

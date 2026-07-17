@@ -4,8 +4,9 @@
  * token-expensive native tools, at the moment of the call (text alone in
  * CLAUDE.md loses to structural friction; a call-time reminder wins).
  *
- * Wire it for "Read|Grep|Glob|WebSearch|WebFetch" (main-loop nudges) AND for
- * "Agent|Task" (inject the preference into spawned subagent prompts). See README.
+ * Wire it for "Read|Grep|Glob|WebSearch|WebFetch|Bash|Edit|Write" (main-loop
+ * nudges) AND for "Agent|Task" (inject the preference into spawned subagent
+ * prompts). See README.
  *
  * Design constraints:
  *  - Cheap: only emits a nudge when it actually pays off (large whole-file
@@ -56,6 +57,17 @@ const BASH_MUTATE_TEXT =
   "delegate(prompt) (the Cursor worker runs git/gh/bkt with full tool access) instead of spending " +
   "expensive orchestrator tokens. You stay the orchestrator; Cursor does the mechanical work.";
 
+// Edit/Write → o agente está prestes a IMPLEMENTAR ele mesmo. 1×/sessão, lembra que uma
+// tarefa self-contained pode ir INTEIRA pro delegate(prompt, level) em vez de gastar tokens
+// caros de orquestrador. Não desencoraja editar — só reposiciona: delegar execução é o default.
+const EDIT_DELEGATE_TEXT =
+  "cursor-bridge available: if this edit is part of a self-contained task (a feature, a bugfix, a " +
+  "mechanical change across files, or running/fixing a build), hand the WHOLE task to " +
+  "delegate(prompt, level) — the Cursor worker has full read/edit/shell access in cwd and runs cheap " +
+  "(level 1 = composer; levels 2-5 escalate to grok/codex for harder work) — instead of implementing " +
+  "it yourself on expensive orchestrator tokens. You stay the orchestrator and verify the result. " +
+  "Keep editing inline only for a quick one-off you're already positioned for.";
+
 /**
  * Texto injetado no SessionStart. O preload de carona no PreToolUse só dispara quando
  * o modelo usa a tool Grep/Read/etc — mas nas sessões reais ele "vai de Bash grep",
@@ -70,12 +82,19 @@ export function sessionStartContext() {
     "in your prompt and fail if called raw. Run " +
     'ToolSearch("select:mcp__cursor-bridge__read_slice,mcp__cursor-bridge__explore,' +
     'mcp__cursor-bridge__run_filtered,mcp__cursor-bridge__web_lookup,mcp__cursor-bridge__delegate") ' +
-    "ONCE now so their schemas load; otherwise the always-loaded native Read/Grep/Bash win by default and " +
-    "you burn expensive tokens on cheap work. For PURE reading/locating/web with no edit ahead, prefer " +
-    "explore/read_slice/run_filtered/web_lookup over Read, Grep, or Bash grep. " +
-    "You are the ORCHESTRATOR — hand cheap grunt-work to delegate(prompt) (the Cursor worker runs with " +
-    "full read/edit/shell access): commits, PRs, tickets, small mechanical edits, and running/fixing " +
-    "builds. Don't spend expensive tokens doing 2-line edits or writing PR/commit text yourself. " +
+    "ONCE now so their schemas load; otherwise the always-loaded native Read/Grep/Bash/Edit/Write win by " +
+    "default and you burn expensive tokens on cheap work. For PURE reading/locating/web with no edit ahead, " +
+    "prefer explore/read_slice/run_filtered/web_lookup over Read, Grep, or Bash grep. " +
+    "You are the ORCHESTRATOR, not the implementer: delegate(prompt, level) is your DEFAULT for BOTH " +
+    "execution AND judgment. Level 1 (cheap composer) for mechanical work — features, bugfixes, multi-file " +
+    "edits, commits, PRs, tickets, grunt-work, running/fixing builds. Levels 4-5 (GPT-5.6 Sol, top-quality " +
+    "— PRICIER than Opus, so reach for them when judgment quality matters, NOT to save tokens) for real " +
+    "reasoning — code review with a verdict, cross-file impact analysis, hard debugging. The Cursor worker " +
+    "runs with full read/edit/shell access in cwd. The win of delegating execution AND judgment is context " +
+    "economy: the worker's file reading and raw output never enter your context, whatever the tier. Hand " +
+    "execution (level 1, cheap) and judgment (level 4-5, Sol) to delegate, then review the result; edit " +
+    "inline only for a quick one-off you're already positioned for. Only spawn a Task subagent when you " +
+    "need a SPECIALIZED agent with its own toolset (e.g. Playwright/MCP-backed reviewers). " +
     "For locating/mapping code, call the bridge's explore(question) DIRECTLY instead of spawning the " +
     "native Explore subagent — the bridge runs on Cursor's composer model (cheap) while a spawned " +
     "Explore would run on your expensive model."
@@ -203,6 +222,13 @@ function baseDecision(input, { stat, read, minLines }, seen) {
     const cmd = typeof ti.command === "string" ? ti.command : "";
     if (!BASH_MUTATE_RE.test(cmd)) return null;
     return seen.has("bash-mutate") ? null : { key: "bash-mutate", text: BASH_MUTATE_TEXT };
+  }
+
+  // Edit/Write/MultiEdit → o agente vai implementar ele mesmo. 1×/sessão: reposiciona
+  // delegate(level) como executor padrão de tarefa self-contained. O dedup evita cutucar
+  // toda edição — o orquestrador ainda edita inline quando faz sentido.
+  if (tool === "Edit" || tool === "Write" || tool === "MultiEdit") {
+    return seen.has("edit-delegate") ? null : { key: "edit-delegate", text: EDIT_DELEGATE_TEXT };
   }
 
   // Grep/Glob disparam muito — por isso só o lembrete de preload, 1× por sessão.
