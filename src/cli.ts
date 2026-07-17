@@ -15,14 +15,6 @@ export const CURSOR_BIN = process.env.CURSOR_BIN ?? "cursor-agent";
 export const GROK_BIN = process.env.CURSOR_BRIDGE_GROK_BIN ?? "grok";
 /** Binário do Codex CLI. Override via CURSOR_BRIDGE_CODEX_BIN. */
 export const CODEX_BIN = process.env.CURSOR_BRIDGE_CODEX_BIN ?? "codex";
-/**
- * Gate do codex (default OFF). O codex NÃO coopera com o sandbox bwrap: seu models-manager
- * subprocess dá timeout e o DNS/socket do app-server (chatgpt.com/backend-api) quebram no namespace
- * isolado — ao contrário de cursor/grok. Como o sandbox é obrigatório, o codex fica desligado por
- * padrão e os tiers 4-5 caem no GPT-5.6 Sol via cursor-agent (roda no bwrap). Ligue com
- * CURSOR_BRIDGE_CODEX=1 só se aceitar rodar o codex fora do sandbox (ver runCursor).
- */
-export const CODEX_ENABLED = ["1", "true", "yes"].includes((process.env.CURSOR_BRIDGE_CODEX ?? "").toLowerCase());
 
 /**
  * Modelo default: Composer 2.5 no modo Fast (bracket `fast=true`). NUNCA `auto` — o worker do bridge
@@ -42,6 +34,9 @@ export const FORCE = ["1", "true", "yes"].includes((process.env.CURSOR_BRIDGE_FO
 
 /** Timeout padrão (ms). Override via CURSOR_BRIDGE_TIMEOUT_MS. */
 export const DEFAULT_TIMEOUT_MS = Number(process.env.CURSOR_BRIDGE_TIMEOUT_MS ?? 600_000);
+
+/** Se truthy, loga o comando spawnado e espelha o stderr do child em tempo real. Debug. */
+export const DEBUG = ["1", "true", "yes"].includes((process.env.CURSOR_BRIDGE_DEBUG ?? "").toLowerCase());
 
 /**
  * Sandbox: por padrão o agent roda dentro de um bubblewrap (`bwrap`) com $HOME isolado —
@@ -325,11 +320,10 @@ export function binExists(bin: string): boolean {
   return false;
 }
 
-/** true se o CLI do engine está disponível e habilitado. cursor é sempre assumido presente. */
+/** true se o CLI do engine está instalado. cursor é sempre assumido presente. */
 export function hasEngine(engine: Engine): boolean {
   if (engine === "cursor") return true;
-  if (engine === "codex") return CODEX_ENABLED && binExists(CODEX_BIN);
-  return binExists(GROK_BIN);
+  return binExists(engine === "grok" ? GROK_BIN : CODEX_BIN);
 }
 
 export interface Tier {
@@ -376,42 +370,43 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
   const engineArgs = buildArgs(engine, opts);
   const workspace = opts.cwd ?? process.cwd();
 
-  // O sandbox bwrap ($HOME isolado) envolve cursor e grok — isola a config global de cada CLI
-  // (~/.cursor/rules, ~/.grok/config.toml) que carregava rules/MCP servers, inflando tokens.
-  // Exceção: o codex NÃO coopera com o bwrap (models-manager subprocess + socket do app-server
-  // quebram no namespace); só é alcançado com CURSOR_BRIDGE_CODEX=1 e roda direto, sob aviso.
+  // O sandbox bwrap ($HOME isolado) é OBRIGATÓRIO para TODOS os engines — nenhum modelo roda fora
+  // dele. Isola a config global de cada CLI (~/.cursor/rules, ~/.grok/config.toml, ~/.codex/config)
+  // que carregava rules/MCP servers, inflando tokens.
   let cmd = bin;
   let args = engineArgs;
   let cleanup = () => {};
-  const bwrap = SANDBOX_ON && engine !== "codex" ? bwrapPath() : null;
+  const bwrap = SANDBOX_ON ? bwrapPath() : null;
   if (bwrap) {
     const built = buildSandboxSpec(workspace, engine);
     cleanup = built.cleanup;
     cmd = bwrap;
     args = [...buildSandboxArgs(built.spec), bin, ...engineArgs];
-  } else if (SANDBOX_ON && engine === "codex") {
-    process.stderr.write(
-      "[cursor-bridge] codex roda FORA do sandbox (incompatível com bwrap). Config global do codex pode vazar.\n",
-    );
   } else if (SANDBOX_ON) {
     process.stderr.write(
       "[cursor-bridge] bwrap não encontrado no PATH — rodando SEM sandbox (config global do user pode vazar). Instale com 'sudo apt install bubblewrap'.\n",
     );
   }
+  if (DEBUG) process.stderr.write(`[cursor-bridge:debug] ${cmd} ${args.map((a) => JSON.stringify(a)).join(" ")}\n`);
 
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd: workspace, env: process.env });
+    // stdin fechado ("ignore"): o `codex exec` fica pendurado ("Reading additional input from
+    // stdin...") se o stdin for um pipe aberto. cursor/grok recebem o prompt por arg e não usam stdin.
+    const child = spawn(cmd, args, { cwd: workspace, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
 
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
       cleanup();
-      reject(new Error(`cursor agent timed out after ${DEFAULT_TIMEOUT_MS}ms`));
+      reject(new Error(`${engine} agent timed out after ${DEFAULT_TIMEOUT_MS}ms: ${stderr.trim().slice(-500)}`));
     }, DEFAULT_TIMEOUT_MS);
 
     child.stdout.on("data", (d) => (stdout += d.toString()));
-    child.stderr.on("data", (d) => (stderr += d.toString()));
+    child.stderr.on("data", (d) => {
+      stderr += d.toString();
+      if (DEBUG) process.stderr.write(d);
+    });
     child.on("error", (err) => {
       clearTimeout(timer);
       cleanup();

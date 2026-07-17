@@ -63,7 +63,7 @@ The bridge drives three coding-agent CLIs, each with its own dialect and output 
 `delegate` takes a required `level` (1-5) → `resolveTier` maps difficulty to (engine, model, effort),
 escalating: 1=`composer-2.5[fast=true]` (cursor), 2=Grok 4.5 medium, 3=Grok 4.5 high, 4=GPT-5.6 Sol
 medium, 5=GPT-5.6 Sol high. **Fallback rule ("use grok/codex if installed, else cursor-agent"):** when
-the preferred CLI is absent/disabled, the tier falls back to the equivalent model on `cursor-agent`
+the preferred CLI is not installed, the tier falls back to the equivalent model on `cursor-agent`
 (`cursor-grok-4.5-high-fast`, `gpt-5.6-sol-high-fast`/`-xhigh-fast`). `hasEngine` injects the `has`
 predicate into `resolveTier` for testability.
 - `prompts.ts` — pure prompt builders (`readSlicePrompt`, `runFilteredPrompt`, `explorePrompt`,
@@ -71,22 +71,24 @@ predicate into `resolveTier` for testability.
   contract usually means editing a prompt here (and its test), not `cli.ts`.
 - `usage.ts` — JSONL usage log behind `CURSOR_BRIDGE_LOG`; drives the `bridge_stats` tool.
 
-### The sandbox (default-on, mandatory for cursor & grok, in `cli.ts`)
+### The sandbox (default-on, mandatory for ALL engines, in `cli.ts`)
 
 `runCursor` wraps the spawn in **bubblewrap (`bwrap`)** with an isolated `$HOME`, so each CLI can't
-load the user's global behavior config (`~/.cursor/rules`, `~/.grok/config.toml`, `mcp.json`, hooks,
-skills). That config was the real cost: it inflated every call to ~57k input tokens and made the CLI
-try to spin up the user's MCP servers on each run (the "hangs until timeout" symptom). Sandboxed, a
-trivial call drops to ~11k input tokens (−80%). Only auth + toolchains are bound in; the workspace
-(`cwd`) is bound RW as the last mount. Per-engine HOME binds are declared in `SANDBOX_ENGINE_RO`
-(grok needs `~/.grok/{bin,downloads,bundled,vendor,auth.json,agent_id}`) and `SANDBOX_ENGINE_RW`
-(codex needs `~/.codex` RW for its state/cache/socket). Design points, all in `cli.ts`:
+load the user's global behavior config (`~/.cursor/rules`, `~/.grok/config.toml`, `~/.codex/config.toml`,
+`mcp.json`, hooks, skills). That config was the real cost: it inflated every call to ~57k input tokens
+and made the CLI try to spin up the user's MCP servers on each run (the "hangs until timeout" symptom).
+Sandboxed, a trivial call drops to ~11k input tokens (−80%). Only auth + toolchains are bound in; the
+workspace (`cwd`) is bound RW as the last mount. Per-engine HOME binds are declared in
+`SANDBOX_ENGINE_RO` (grok needs `~/.grok/{bin,downloads,bundled,vendor,auth.json,agent_id}`) and
+`SANDBOX_ENGINE_RW` (codex needs `~/.codex` RW for its state/cache/socket). Design points, all in `cli.ts`:
 
-- **The codex is the exception — it does NOT run in the sandbox.** Its models-manager subprocess
-  times out and the app-server socket / `chatgpt.com` DNS break inside the bwrap namespace. So codex
-  is gated behind `CURSOR_BRIDGE_CODEX=1` (default off) and, when enabled, runs UNSANDBOXED (with a
-  stderr warning). While off, `hasEngine("codex")` is false and tiers 4-5 fall back to GPT-5.6 Sol on
-  `cursor-agent` (which sandboxes fine) — this keeps "every model in the sandbox" true by default.
+- **stdin MUST be closed (`stdio: ["ignore",…]`).** `codex exec` hangs forever ("Reading additional
+  input from stdin…") if stdin is an open pipe — this, NOT the namespace, was why codex appeared to
+  "not survive the sandbox". With stdin closed, codex runs in the bwrap like the others (~9s). cursor
+  and grok take the prompt by arg and never read stdin, so closing it is safe for all three.
+- **codex config is neutralized by flags, not just the sandbox:** `buildCodexArgs` always passes
+  `--ignore-user-config`/`--ignore-rules` so `~/.codex/config.toml` (with its external MCP servers,
+  which spawned runaway `mcp-server` procs) is never loaded; auth still resolves via `CODEX_HOME`.
 - **`buildSandboxArgs(spec)` is pure and unit-tested** (like `buildCursorArgs`). Bind order is
   load-bearing: `isoHome` mounts the empty `$HOME` **before** the HOME-subpath overlays (auth/
   toolchain), and the `workspace` bind is **last** so it's never shadowed. `buildSandboxSpec(workspace,
