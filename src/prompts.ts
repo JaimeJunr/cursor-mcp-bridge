@@ -106,3 +106,30 @@ export function explorePrompt(
 export function webLookupPrompt(query: string): string {
   return `Look this up on the web and answer concisely with sources/links.\n\nQuery: ${query}`;
 }
+
+/**
+ * generate_image: instrui o codex a usar o image_gen built-in (gpt-image-2) para gerar ou editar
+ * uma imagem e salvar no outPath dentro do cwd.
+ */
+export function generateImagePrompt(description: string, outPath: string, inputImages?: string[]): string {
+  const modelRule = [
+    "Use your built-in image generation tool (image_gen) with the gpt-image-2 model.",
+    "NEVER silently downgrade to gpt-image-1 or gpt-image-1.5; if gpt-image-2 is unavailable, say so explicitly.",
+  ].join(" ");
+
+  const task = inputImages?.length
+    ? `Edit the attached image(s) according to: ${description}. Keep everything not explicitly mentioned (subject, framing, identity, text). Save non-destructively (do not overwrite the source).`
+    : `Generate a new image: ${description}.`;
+
+  const saveRule = [
+    `The final PNG MUST be saved to the path ${outPath} inside the current working directory.`,
+    "If you save it first under ~/.codex/generated_images, MOVE it to that path.",
+    "Never leave the result only in the codex cache.",
+  ].join(" ");
+
+  const report = [
+    "Report in plain text: the final saved path, the file size, and which image model was actually used.",
+  ].join(" ");
+
+  return [modelRule, task, saveRule, report].join("\n\n");
+}

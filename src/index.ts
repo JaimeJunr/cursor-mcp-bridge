@@ -2,8 +2,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { runCursor, EXPLORE_MODEL, resolveTier, type CliResult } from "./cli.js";
-import { readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt } from "./prompts.js";
+import { runCursor, EXPLORE_MODEL, IMAGE_MODEL, hasEngine, resolveTier, type CliResult } from "./cli.js";
+import { readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt, generateImagePrompt } from "./prompts.js";
 import { logUsage, readUsage, aggregate } from "./usage.js";
 
 const server = new McpServer({ name: "cursor-mcp-bridge", version: "0.4.0" });
@@ -144,6 +144,46 @@ server.registerTool(
     // force: em headless a web search fica esperando aprovação que nunca chega e leva timeout;
     // --force auto-aprova a tool, e mode:'ask' mantém o filesystem read-only.
     format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, model, effort, mode: "ask", force: true })),
+);
+
+server.registerTool(
+  "generate_image",
+  {
+    description:
+      "Generate or edit bitmap images via the codex CLI's built-in image_gen (gpt-image-2, keyless — uses your ChatGPT/Codex subscription, no API key). Returns ONLY the saved file path (never image bytes) to preserve context. out_path must be inside cwd (the sandbox only mounts cwd).",
+    inputSchema: {
+      description: z.string().describe("What image to generate, or — when input_images is set — how to edit them. Free-form natural language."),
+      out_path: z.string().describe("Where to save the resulting PNG, relative to cwd (the sandbox only mounts cwd, so paths outside it fail)."),
+      input_images: z
+        .array(z.string())
+        .optional()
+        .describe("Optional source image file paths to EDIT (relative to cwd). Omit to generate a fresh image."),
+      cwd: z.string().optional().describe("Absolute path to the project root. Defaults to the server's cwd."),
+    },
+  },
+  async ({ description, out_path, input_images, cwd }) => {
+    if (!hasEngine("codex")) {
+      return {
+        content: [{
+          type: "text" as const,
+          text: "generate_image requires the codex CLI (the only engine with image_gen / gpt-image-2). Install codex and log in.",
+        }],
+      };
+    }
+    const prompt = generateImagePrompt(description, out_path, input_images);
+    return format(
+      "generate_image",
+      await runCursor({
+        prompt,
+        cwd,
+        engine: "codex",
+        model: IMAGE_MODEL,
+        effort: "low",
+        force: true,
+        images: input_images,
+      }),
+    );
+  },
 );
 
 server.registerTool(
