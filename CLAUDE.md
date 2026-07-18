@@ -29,8 +29,8 @@ There is no linter configured. `npm run build` (tsc, `strict: true`) is the type
 Four small modules under `src/`, each with a matching `test/*.test.ts`. The split exists so the
 **pure logic is testable without spawning the Cursor process**:
 
-- `index.ts` — MCP server + tool registrations (seven tools: `delegate`, `explore`, `read_slice`,
-  `run_filtered`, `web_lookup`, `follow_up`, `bridge_stats`). Owns tool descriptions and the shared
+- `index.ts` — MCP server + tool registrations (eight tools: `delegate`, `explore`, `read_slice`,
+  `run_filtered`, `web_lookup`, `generate_image`, `follow_up`, `bridge_stats`). Owns tool descriptions and the shared
   `routing` params (`cwd`/`model`/`effort`). `format()` appends the `session_id` footer and logs
   usage; `follow_up` feeds that id back as `RunOpts.resume` (`--resume`) so a prior Cursor session
   continues without resending its context — the footer and `follow_up` are two ends of the same loop.
@@ -123,15 +123,28 @@ workspace (`cwd`) is bound RW as the last mount. Per-engine HOME binds are decla
   Do not silently change a read-only tool to run without a mode. `explore` must use `ask`, never `plan`: `plan`
   makes the Cursor worker emit an implementation plan ("vou formalizar no plano") instead of
   answering the question — a real regression. `RunOpts.mode` keeps `"plan"` as a valid CLI value.
-- **`auto` ignores `effort`.** `resolveModel` only appends `[effort=...]` for non-`auto` models.
-  `auto` is the default model (cheapest); keep it the default.
-- **`explore` defaults to `auto` via `EXPLORE_MODEL`.** `EXPLORE_MODEL` (env `CURSOR_BRIDGE_EXPLORE_MODEL`)
-  is applied in the `explore` handler as `model ?? EXPLORE_MODEL` — `auto` lets Cursor pick its cheap/fast
-  model (in practice composer) without pinning an id that can go slow/unavailable, so exploration never
-  escalates to the caller's expensive model. An explicit `model` still wins.
+- **The default model is `composer-2.5[fast=true]`, never `auto`.** `DEFAULT_MODEL` (env
+  `CURSOR_BRIDGE_MODEL`) pins the cheap/fast Fast bracket so the worker is deterministic — the Fast
+  bracket is load-bearing (the user pays for Fast explicitly). `resolveModel` still special-cases
+  `auto` (it ignores `effort` — `[effort=...]` is only appended for non-`auto` models), so `auto`
+  stays a valid caller-supplied value, but it is NOT the default. Keep the default on Fast composer.
+- **`explore`/`read_slice`/`run_filtered`/`web_lookup` default to `composer-2.5[fast=true]` via
+  `EXPLORE_MODEL`.** `EXPLORE_MODEL` (env `CURSOR_BRIDGE_EXPLORE_MODEL`) is applied in the `explore`
+  handler as `model ?? EXPLORE_MODEL` — the cheap/fast Fast bracket, same rationale as `DEFAULT_MODEL`,
+  so reading/locating never escalates to the caller's expensive model. An explicit `model` still wins.
   `explore` also takes `breadth` (`medium`|`thorough`) → passed to `explorePrompt`; it LOCATES, never reviews.
 - **`read_slice` must return source lines, not just `file:line` prefixes** — this is an explicit
   instruction in `readSlicePrompt` and was a real regression (commit c41c2af). Preserve it.
+- **`generate_image` is codex-only.** It is the sole tool with no cursor fallback: the built-in
+  `image_gen`/`gpt-image-2` (keyless, via the ChatGPT/Codex subscription) exists only in codex, so the
+  handler hard-fails when `hasEngine("codex")` is false. It forces `codex exec` at `IMAGE_MODEL` (env
+  `CURSOR_BRIDGE_IMAGE_MODEL`, default `gpt-5.6-sol`) with `effort:"low"` — the built-in tool does the
+  pixels, the driver model just fires it. `RunOpts.images` (input files for editing) become `-i <file>`
+  in `buildCodexArgs`, **followed by a `--` terminator**: `-i/--image` is variadic (`<FILE>...`), so
+  without `--` the clap parser swallows the positional prompt as another image file and codex falls back
+  to the (closed) stdin → "No prompt provided via stdin". `generateImagePrompt` pins gpt-image-2
+  best-effort (the tool has no model selector) and enforces generate-then-move into the cwd; the tool
+  returns only the saved path, never the bytes (context economy). `out_path` must live inside `cwd`.
 - **`parseCliJson` degrades gracefully**: non-JSON stdout falls back to raw text; `usage.ts`
   skips malformed JSONL lines. Match this best-effort posture — logging/parsing must never throw
   up into a tool call.

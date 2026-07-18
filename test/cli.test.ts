@@ -165,6 +165,43 @@ describe("buildCodexArgs", () => {
     expect(args.at(-2)).toBe("uuid-1");
     expect(args.at(-1)).toBe("more");
   });
+
+  it("anexa -i por imagem de entrada quando opts.images está setado", () => {
+    const args = buildCodexArgs({ prompt: "edit", model: "gpt-5.6-sol", images: ["a.png", "b.png"] });
+    expect(args).toContain("-i");
+    expect(args[args.indexOf("-i") + 1]).toBe("a.png");
+    expect(args[args.indexOf("-i", args.indexOf("-i") + 1) + 1]).toBe("b.png");
+  });
+
+  it("com images, separa o prompt posicional com `--` (senão o -i variádico o engole)", () => {
+    const args = buildCodexArgs({ prompt: "edit", images: ["a.png"] });
+    // o prompt é o último arg e vem logo após o terminador `--`
+    expect(args.at(-1)).toBe("edit");
+    expect(args.at(-2)).toBe("--");
+  });
+
+  it("não inclui -i nem `--` quando opts.images está ausente ou vazio", () => {
+    expect(buildCodexArgs({ prompt: "gen" })).not.toContain("-i");
+    expect(buildCodexArgs({ prompt: "gen" })).not.toContain("--");
+    expect(buildCodexArgs({ prompt: "gen", images: [] })).not.toContain("-i");
+  });
+
+  it("inclui -i no resume path quando há resume e images", () => {
+    const args = buildCodexArgs({
+      prompt: "more",
+      model: "gpt-5.6-sol",
+      resume: "uuid-1",
+      images: ["src.png"],
+    });
+    expect(args[0]).toBe("exec");
+    expect(args[1]).toBe("resume");
+    expect(args).toContain("-i");
+    expect(args[args.indexOf("-i") + 1]).toBe("src.png");
+    // `--` termina o -i variádico antes dos posicionais <id> <prompt> do resume
+    expect(args.at(-3)).toBe("--");
+    expect(args.at(-2)).toBe("uuid-1");
+    expect(args.at(-1)).toBe("more");
+  });
 });
 
 describe("resolveTier", () => {

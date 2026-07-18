@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt } from "../src/prompts.js";
+import {
+  readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt, generateImagePrompt,
+} from "../src/prompts.js";
 
 describe("readSlicePrompt", () => {
   it("names the files and the target, and forbids the full dump", () => {
@@ -72,5 +74,23 @@ describe("webLookupPrompt", () => {
     const p = webLookupPrompt("zod v4 changes");
     expect(p).toContain("zod v4 changes");
     expect(p).toMatch(/source|link/i);
+  });
+});
+
+describe("generateImagePrompt", () => {
+  it("generate mode: exige gpt-image-2, outPath e proíbe downgrade silencioso", () => {
+    const p = generateImagePrompt("a red circle on white", "out/hero.png");
+    expect(p).toContain("gpt-image-2");
+    expect(p).toContain("out/hero.png");
+    expect(p).toMatch(/gpt-image-1|downgrade|never silently/i);
+    expect(p).toMatch(/generate a new image/i);
+  });
+
+  it("edit mode: instrui edição preservando o resto e inclui outPath", () => {
+    const p = generateImagePrompt("make the sky purple", "out/edited.png", ["src/photo.png"]);
+    expect(p).toContain("out/edited.png");
+    expect(p).toMatch(/edit.*attached|attached image/i);
+    expect(p).toMatch(/keep everything|not explicitly mentioned/i);
+    expect(p).toMatch(/make the sky purple/i);
   });
 });

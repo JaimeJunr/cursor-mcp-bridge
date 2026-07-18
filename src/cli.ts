@@ -29,6 +29,12 @@ export const DEFAULT_MODEL = process.env.CURSOR_BRIDGE_MODEL ?? "composer-2.5[fa
  */
 export const EXPLORE_MODEL = process.env.CURSOR_BRIDGE_EXPLORE_MODEL ?? "composer-2.5[fast=true]";
 
+/**
+ * Modelo codex que dispara o image_gen built-in (gpt-image-2 faz o trabalho pesado; effort baixo basta).
+ * Override via CURSOR_BRIDGE_IMAGE_MODEL.
+ */
+export const IMAGE_MODEL = process.env.CURSOR_BRIDGE_IMAGE_MODEL ?? "gpt-5.6-sol";
+
 /** Se truthy, passa --force (roda comandos sem prompt). Default off por segurança. */
 export const FORCE = ["1", "true", "yes"].includes((process.env.CURSOR_BRIDGE_FORCE ?? "").toLowerCase());
 
@@ -202,6 +208,8 @@ export interface RunOpts {
   cwd?: string;
   /** Timeout deste run (ms). Sobrepõe DEFAULT_TIMEOUT_MS — tarefas que rodam build precisam de mais. */
   timeoutMs?: number;
+  /** Imagens de entrada anexadas ao prompt (codex -i). Usado por generate_image para edição. */
+  images?: string[];
 }
 
 /**
@@ -252,9 +260,15 @@ export function buildCodexArgs(opts: RunOpts): string[] {
   const flags = ["--json", "--ignore-user-config", "--ignore-rules", "--dangerously-bypass-approvals-and-sandbox"];
   if (opts.model) flags.push("-m", opts.model);
   if (opts.effort) flags.push("-c", `model_reasoning_effort="${opts.effort}"`);
+  if (opts.images?.length) {
+    for (const file of opts.images) flags.push("-i", file);
+  }
+  // -i/--image é variádico (`<FILE>...`): sem o terminador `--`, o clap engole o prompt posicional
+  // como se fosse mais um arquivo e o codex cai no stdin (fechado) → "No prompt provided via stdin".
+  const sep = opts.images?.length ? ["--"] : [];
   // resume é subcomando próprio: `codex exec resume [OPTIONS] <id> <prompt>` (id e prompt posicionais).
-  if (opts.resume) return ["exec", "resume", ...flags, opts.resume, opts.prompt];
-  return ["exec", ...flags, opts.prompt];
+  if (opts.resume) return ["exec", "resume", ...flags, ...sep, opts.resume, opts.prompt];
+  return ["exec", ...flags, ...sep, opts.prompt];
 }
 
 /** Despacha a montagem de args pelo engine. */
