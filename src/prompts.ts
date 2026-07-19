@@ -133,3 +133,18 @@ export function generateImagePrompt(description: string, outPath: string, inputI
 
   return [modelRule, task, saveRule, report].join("\n\n");
 }
+
+/** generate_image via Grok: usa image_gen/image_edit built-in e salva o PNG dentro do cwd. */
+export function generateImageGrokPrompt(description: string, outPath: string, inputImages?: string[]): string {
+  const task = inputImages?.length
+    ? `Use your built-in \`image_edit\` tool. Source/reference image(s) (filesystem paths in the current working directory): ${inputImages.join(", ")}. Edit them as follows: ${description}.`
+    : `Use your built-in \`image_gen\` tool to generate the following image: ${description}.`;
+
+  const saveRule = [
+    `Save the final result as a PNG at the exact path \`${outPath}\` inside the current working directory.`,
+    `If the tool produces a JPEG or saves to a cache/downloads location first, convert to PNG and move it to \`${outPath}\`.`,
+    "Never leave it only in a cache.",
+  ].join(" ");
+
+  return [task, saveRule, "Report ONLY the final saved path — no summary."].join("\n\n");
+}

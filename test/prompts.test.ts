@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt, generateImagePrompt,
+  readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
+  generateImagePrompt, generateImageGrokPrompt,
 } from "../src/prompts.js";
 
 describe("readSlicePrompt", () => {
@@ -92,5 +93,29 @@ describe("generateImagePrompt", () => {
     expect(p).toMatch(/edit.*attached|attached image/i);
     expect(p).toMatch(/keep everything|not explicitly mentioned/i);
     expect(p).toMatch(/make the sky purple/i);
+  });
+});
+
+describe("generateImageGrokPrompt", () => {
+  it("generate mode: usa image_gen, exige PNG/outPath e não vaza instruções do codex", () => {
+    const p = generateImageGrokPrompt("a red circle on white", "out/hero.png");
+    expect(p).toContain("image_gen");
+    expect(p).toContain("out/hero.png");
+    expect(p).toMatch(/PNG.*convert|convert.*PNG/is);
+    expect(p).not.toMatch(/gpt-image-2|~\/\.codex/i);
+  });
+
+  it("edit mode: usa image_edit e inclui todos os paths de referência", () => {
+    const p = generateImageGrokPrompt(
+      "make the sky purple",
+      "out/edited.png",
+      ["src/photo.png", "refs/style.jpg"],
+    );
+    expect(p).toContain("image_edit");
+    expect(p).toContain("src/photo.png");
+    expect(p).toContain("refs/style.jpg");
+    expect(p).toContain("out/edited.png");
+    expect(p).toMatch(/PNG.*convert|convert.*PNG/is);
+    expect(p).not.toMatch(/gpt-image-2|~\/\.codex/i);
   });
 });

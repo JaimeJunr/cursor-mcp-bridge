@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
-  buildCursorArgs, buildGrokArgs, buildCodexArgs, buildSandboxArgs,
+  buildCursorArgs, buildGrokArgs, buildCodexArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
   parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
   type SandboxSpec, type Engine,
 } from "../src/cli.js";
@@ -122,6 +125,30 @@ describe("buildSandboxArgs", () => {
     expect(args).toContain("--die-with-parent");
     expect(args[args.indexOf("--chdir") + 1]).toBe("/repo");
   });
+
+  it("inclui ~/.grok como bind RW somente para o engine grok", () => {
+    const oldHome = process.env.HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), "cbx-test-home-"));
+    mkdirSync(join(fakeHome, ".grok"));
+    process.env.HOME = fakeHome;
+    const grok = buildSandboxSpec("/repo", "grok");
+    const cursor = buildSandboxSpec("/repo", "cursor");
+    try {
+      const grokHome = join(fakeHome, ".grok");
+      const grokArgs = buildSandboxArgs(grok.spec);
+      const grokBind = grokArgs.indexOf(grokHome);
+      expect(grok.spec.homeRw).toContain(grokHome);
+      expect(grokArgs[grokBind - 1]).toBe("--bind");
+      expect(grokArgs[grokBind + 1]).toBe(grokHome);
+      expect(cursor.spec.homeRw).not.toContain(grokHome);
+    } finally {
+      grok.cleanup();
+      cursor.cleanup();
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("buildGrokArgs", () => {
@@ -138,6 +165,12 @@ describe("buildGrokArgs", () => {
   it("adiciona -r no resume", () => {
     const args = buildGrokArgs({ prompt: "more", model: "grok-4.5", resume: "g-1" });
     expect(args[args.indexOf("-r") + 1]).toBe("g-1");
+  });
+
+  it("é selecionado pelo dispatcher e ignora images (grok lê os paths pelo prompt)", () => {
+    const opts = { prompt: "edit refs/a.png", images: ["refs/a.png"] };
+    expect(buildArgs("grok", opts)).toEqual(buildGrokArgs(opts));
+    expect(buildArgs("grok", opts)).not.toContain("-i");
   });
 });
 
