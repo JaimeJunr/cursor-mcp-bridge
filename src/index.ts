@@ -3,7 +3,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { runCursor, EXPLORE_MODEL, IMAGE_MODEL, hasEngine, resolveTier, type CliResult } from "./cli.js";
-import { readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt, generateImagePrompt } from "./prompts.js";
+import {
+  readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
+  generateImagePrompt, generateImageGrokPrompt,
+} from "./prompts.js";
 import { logUsage, readUsage, aggregate } from "./usage.js";
 
 const server = new McpServer({ name: "cursor-mcp-bridge", version: "0.4.0" });
@@ -150,7 +153,7 @@ server.registerTool(
   "generate_image",
   {
     description:
-      "Generate or edit bitmap images via the codex CLI's built-in image_gen (gpt-image-2, keyless — uses your ChatGPT/Codex subscription, no API key). Returns ONLY the saved file path (never image bytes) to preserve context. out_path must be inside cwd (the sandbox only mounts cwd).",
+      "Generate or edit bitmap images via the keyless codex or grok CLI image tools. Returns ONLY the saved file path (never image bytes) to preserve context. out_path must be inside cwd (the sandbox only mounts cwd).",
     inputSchema: {
       description: z.string().describe("What image to generate, or — when input_images is set — how to edit them. Free-form natural language."),
       out_path: z.string().describe("Where to save the resulting PNG, relative to cwd (the sandbox only mounts cwd, so paths outside it fail)."),
@@ -158,19 +161,34 @@ server.registerTool(
         .array(z.string())
         .optional()
         .describe("Optional source image file paths to EDIT (relative to cwd). Omit to generate a fresh image."),
+      engine: z
+        .enum(["codex", "grok"])
+        .optional()
+        .describe("Image engine: 'codex' (gpt-image-2, default) or 'grok' (grok-4.5-build via Grok subscription). Both keyless."),
       cwd: z.string().optional().describe("Absolute path to the project root. Defaults to the server's cwd."),
     },
   },
-  async ({ description, out_path, input_images, cwd }) => {
-    if (!hasEngine("codex")) {
+  async ({ description, out_path, input_images, engine, cwd }) => {
+    const eng = engine ?? "codex";
+    if (!hasEngine(eng)) {
       return {
         content: [{
           type: "text" as const,
-          text: "generate_image requires the codex CLI (the only engine with image_gen / gpt-image-2). Install codex and log in.",
+          text: eng === "grok"
+            ? "generate_image requires the grok CLI — install it and run `grok login`."
+            : "generate_image requires the codex CLI (for image_gen / gpt-image-2). Install codex and log in.",
         }],
       };
     }
-    const prompt = generateImagePrompt(description, out_path, input_images);
+    const prompt = eng === "grok"
+      ? generateImageGrokPrompt(description, out_path, input_images)
+      : generateImagePrompt(description, out_path, input_images);
+    if (eng === "grok") {
+      return format(
+        "generate_image",
+        await runCursor({ prompt, cwd, engine: "grok", force: true }),
+      );
+    }
     return format(
       "generate_image",
       await runCursor({

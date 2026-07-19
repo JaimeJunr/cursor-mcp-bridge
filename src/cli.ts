@@ -71,17 +71,17 @@ const SANDBOX_HOME_RO = [
  */
 const SANDBOX_ENGINE_RO: Record<Engine, string[]> = {
   cursor: [], // auth do cursor já vem no SANDBOX_HOME_RO base
-  grok: [".grok/bin", ".grok/downloads", ".grok/bundled", ".grok/vendor", ".grok/auth.json", ".grok/agent_id"],
+  grok: [], // grok precisa de RW em ~/.grok (auth, skills e cache) — ver SANDBOX_ENGINE_RW
   codex: [], // codex precisa de RW em ~/.codex (state/cache/locks/socket) — ver SANDBOX_ENGINE_RW
 };
 /**
- * Subpaths do HOME RW por engine. O codex tem arquitetura cliente-daemon (state, cache, locks,
- * socket do app-server) e trava se ~/.codex for read-only ou ausente; damos RW ao dir inteiro. A
- * config global (MCP servers) é neutralizada por `--ignore-user-config`, não pelo isolamento do bind.
+ * Subpaths do HOME RW por engine. Grok precisa de auth/skills/cache em ~/.grok; o codex tem
+ * arquitetura cliente-daemon (state, cache, locks, socket do app-server) e trava se ~/.codex for
+ * read-only ou ausente. A config global do codex é neutralizada por `--ignore-user-config`.
  */
 const SANDBOX_ENGINE_RW: Record<Engine, string[]> = {
   cursor: [],
-  grok: [],
+  grok: [".grok"],
   codex: [".codex"],
 };
 /** Subpaths do HOME liberados RW: caches de build (acelera runs seguidos). */
@@ -163,7 +163,7 @@ function bwrapPath(): string | null {
 }
 
 /** Cria os dirs efêmeros e sonda os paths existentes pra montar o SandboxSpec. */
-function buildSandboxSpec(workspace: string, engine: Engine): { spec: SandboxSpec; cleanup: () => void } {
+export function buildSandboxSpec(workspace: string, engine: Engine): { spec: SandboxSpec; cleanup: () => void } {
   const home = process.env.HOME ?? homedir();
   const isoHome = mkdtempSync(join(tmpdir(), "cbx-home-"));
   const tmpDir = mkdtempSync(join(tmpdir(), "cbx-tmp-"));
