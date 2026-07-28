@@ -300,6 +300,37 @@ describe("buildClaudeArgs", () => {
   });
 });
 
+describe("agentPrompt injection (cross-engine, não só claude)", () => {
+  const persona = "You are a strict reviewer.";
+
+  it("claude injeta a persona via --append-system-prompt", () => {
+    const args = buildClaudeArgs({ prompt: "review", agentPrompt: persona });
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toBe(persona);
+  });
+
+  it("grok injeta a persona via --rules", () => {
+    const args = buildGrokArgs({ prompt: "review", agentPrompt: persona });
+    expect(args[args.indexOf("--rules") + 1]).toBe(persona);
+  });
+
+  it("codex injeta a persona via -c developer_instructions (TOML-encoded)", () => {
+    const args = buildCodexArgs({ prompt: "review", agentPrompt: 'has "quotes"\nand newline' });
+    const ci = args.find((a) => a.startsWith("developer_instructions="));
+    expect(ci).toBe('developer_instructions="has \\"quotes\\"\\nand newline"');
+  });
+
+  it("cursor (fallback) prefixa a persona no prompt", () => {
+    const args = buildCursorArgs({ prompt: "review", agentPrompt: persona });
+    expect(args.at(-1)).toBe(`${persona}\n\n---\n\nreview`);
+  });
+
+  it("nenhum canal aparece quando agentPrompt está ausente", () => {
+    expect(buildClaudeArgs({ prompt: "x" })).not.toContain("--append-system-prompt");
+    expect(buildGrokArgs({ prompt: "x" })).not.toContain("--rules");
+    expect(buildCodexArgs({ prompt: "x" }).some((a) => a.startsWith("developer_instructions="))).toBe(false);
+  });
+});
+
 describe("parseCliJson", () => {
   it("extracts result and session_id (cursor)", () => {
     const raw = JSON.stringify({ type: "result", result: "PONG", session_id: "s-1" });

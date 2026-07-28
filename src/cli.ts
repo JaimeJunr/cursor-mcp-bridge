@@ -230,6 +230,17 @@ export interface RunOpts {
   timeoutMs?: number;
   /** Imagens de entrada anexadas ao prompt (codex -i). Usado por generate_image para edição. */
   images?: string[];
+  /**
+   * Persona/system-prompt de um agent especializado, injetada pelo canal aditivo de cada engine
+   * (claude --append-system-prompt, grok --rules, codex -c developer_instructions, cursor prefixo).
+   * Resolvida no host por resolveAgent (src/agents.ts). Cross-engine — não é exclusiva do claude.
+   */
+  agentPrompt?: string;
+}
+
+/** Codifica uma string como TOML basic string (aspas + escapes) para `-c key=value` do codex. */
+export function tomlString(s: string): string {
+  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "")}"`;
 }
 
 /**
@@ -252,7 +263,8 @@ export function buildCursorArgs(opts: RunOpts): string[] {
   if (opts.mode) args.push("--mode", opts.mode);
   if (opts.resume) args.push("--resume", opts.resume);
   if (FORCE || opts.force) args.push("--force");
-  args.push(opts.prompt);
+  // cursor-agent não tem canal de system-prompt aditivo; a persona vai como prefixo do prompt (fallback).
+  args.push(opts.agentPrompt ? `${opts.agentPrompt}\n\n---\n\n${opts.prompt}` : opts.prompt);
   return args;
 }
 
@@ -265,6 +277,7 @@ export function buildGrokArgs(opts: RunOpts): string[] {
   const args = ["--single", opts.prompt, "--output-format", "json"];
   if (opts.model) args.push("-m", opts.model);
   if (opts.effort) args.push("--effort", opts.effort);
+  if (opts.agentPrompt) args.push("--rules", opts.agentPrompt); // canal aditivo de system prompt do grok
   args.push("--always-approve");
   if (opts.resume) args.push("-r", opts.resume);
   return args;
@@ -281,6 +294,9 @@ export function buildCodexArgs(opts: RunOpts): string[] {
   const flags = ["--json", "--ignore-user-config", "--ignore-rules", "--dangerously-bypass-approvals-and-sandbox"];
   if (opts.model) flags.push("-m", opts.model);
   if (opts.effort) flags.push("-c", `model_reasoning_effort="${opts.effort}"`);
+  // persona aditiva do codex: developer_instructions (developer-role), TOML-encoded. NÃO usamos
+  // AGENTS.md nem model_instructions_file (esse último SUBSTITUI as instruções do codex).
+  if (opts.agentPrompt) flags.push("-c", `developer_instructions=${tomlString(opts.agentPrompt)}`);
   if (opts.images?.length) {
     for (const file of opts.images) flags.push("-i", file);
   }
@@ -310,6 +326,7 @@ export function buildClaudeArgs(opts: RunOpts): string[] {
     "--setting-sources", "project",
   ];
   if (opts.model) args.push("--model", opts.model);
+  if (opts.agentPrompt) args.push("--append-system-prompt", opts.agentPrompt); // canal nativo do claude
   // autonomia: em headless o claude bloqueia em permissões sem isso. O sandbox contém o raio ao cwd.
   if (FORCE || opts.force) args.push("--dangerously-skip-permissions");
   if (opts.resume) args.push("--resume", opts.resume);

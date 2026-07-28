@@ -3,6 +3,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { runCursor, EXPLORE_MODEL, IMAGE_MODEL, hasEngine, resolveTier, type CliResult } from "./cli.js";
+import { resolveAgent } from "./agents.js";
 import {
   readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
   generateImagePrompt, generateImageGrokPrompt,
@@ -47,6 +48,17 @@ server.registerTool(
         .min(1)
         .max(5)
         .describe("Task difficulty 1-5, each a distinct model: 1=GPT-5.6 Luna (codex), 2=Grok 4.5 (grok), 3=GPT-5.6 Terra (codex), 4=GPT-5.6 Sol (codex), 5=Claude Opus (claude). Use the lowest level that fits."),
+      agent: z
+        .union([
+          z.string(),
+          z.object({
+            prompt: z.string(),
+            name: z.string().optional(),
+            model: z.string().optional(),
+          }),
+        ])
+        .optional()
+        .describe("Run the worker as a specialized agent/persona. A name (e.g. 'pit:issue-investigator' or 'code-reviewer') is resolved from .claude/agents (project + home) and ~/.claude/plugins — its system prompt is injected via each engine's native channel (claude --append-system-prompt, grok --rules, codex developer_instructions). Or pass an inline { prompt } to skip file lookup. Works on every level/engine, not just claude."),
       timeout_ms: z
         .number()
         .int()
@@ -59,8 +71,11 @@ server.registerTool(
   // O nível escolhe engine+modelo+effort (resolveTier). force: no sandbox o $HOME isolado tira o
   // "trusted" do cursor-agent e todo shell é rejeitado sem --force; grok/codex auto-aprovam por args.
   // `model`/`effort` explícitos do chamador ainda sobrepõem o tier.
-  async ({ prompt, level, timeout_ms, cwd, model, effort }) => {
+  async ({ prompt, level, agent, timeout_ms, cwd, model, effort }) => {
     const tier = resolveTier(level);
+    // Resolve o agent no host (fora do sandbox): a persona vira string injetada por engine. O `model`
+    // do frontmatter é advisory — o `model` explícito e o do tier vencem.
+    const resolved = agent ? resolveAgent(agent, cwd ?? process.cwd()) : undefined;
     return format(
       "delegate",
       await runCursor({
@@ -69,6 +84,7 @@ server.registerTool(
         engine: tier.engine,
         model: model ?? tier.model,
         effort: effort ?? tier.effort,
+        agentPrompt: resolved?.prompt,
         force: true,
         timeoutMs: timeout_ms,
       }),
