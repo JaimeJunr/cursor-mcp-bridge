@@ -2,7 +2,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { runCursor, EXPLORE_MODEL, IMAGE_MODEL, hasEngine, resolveTier, type CliResult } from "./cli.js";
+import {
+  runCursor, EXPLORE_MODEL, IMAGE_MODEL, DEFAULT_TIMEOUT_MS, budgetNote,
+  hasEngine, resolveTier, type CliResult,
+} from "./cli.js";
 import { resolveAgent } from "./agents.js";
 import {
   readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
@@ -10,7 +13,13 @@ import {
 } from "./prompts.js";
 import { logUsage, readUsage, aggregate } from "./usage.js";
 
-const server = new McpServer({ name: "cursor-mcp-bridge", version: "0.5.0" });
+const server = new McpServer(
+  { name: "cursor-mcp-bridge", version: "0.5.0" },
+  {
+    instructions:
+      "cursor-mcp-bridge offloads work to cheap headless CLIs so you do not spend your own context. Routing: pure reading or locating a specific slice → read_slice; mapping or searching the codebase → explore; running a noisy command and keeping only the signal → run_filtered; web or docs lookup → web_lookup; self-contained implementation, commits, PRs, multi-file edits, or running and fixing a build → delegate (level 1-5). Two-phase work: plan → build. Prefer these tools over native Read, Grep, WebSearch, or Bash for pure reading, locating, web lookup, and grunt work; use native Read only when you are about to edit that file. Every tool returns a session_id for follow_up.",
+  },
+);
 
 // Params de roteamento compartilhados.
 const routing = {
@@ -46,6 +55,7 @@ function format(tool: string, res: CliResult): { content: { type: "text"; text: 
 server.registerTool(
   "delegate",
   {
+    _meta: { "anthropic/alwaysLoad": true },
     description:
       "Delegate a task to a headless coding-agent CLI — the cheap/fast worker with full tool access (read, edit, shell) in cwd. As the orchestrator, offload grunt-work here instead of spending your own expensive tokens: commits, opening/updating PRs, writing tickets/comments, small mechanical or 2-line edits, running a build/test and fixing it, and routine implementation. The `level` (1-5) picks a DISTINCT model by task difficulty, spread across the codex/grok/claude subscriptions: 1=GPT-5.6 Luna (codex, cheapest), 2=Grok 4.5 (grok), 3=GPT-5.6 Terra (codex), 4=GPT-5.6 Sol (codex), 5=Claude Opus (claude). Pick the lowest level that can do the job. Give a complete, self-contained instruction — the worker does not see your context.",
     inputSchema: {
@@ -62,7 +72,7 @@ server.registerTool(
         .int()
         .positive()
         .optional()
-        .describe("Max wall-clock ms for this delegation. Default 600000 (10 min). Raise for build-heavy tasks that run a test suite or build multiple times (e.g. a full TDD red→green→refactor with slow builds)."),
+        .describe("Max wall-clock ms for this delegation. Default 1800000 (30 min). Raise for unusually long build-heavy tasks."),
       ...routing,
     },
   },
@@ -77,7 +87,7 @@ server.registerTool(
     return format(
       "delegate",
       await runCursor({
-        prompt,
+        prompt: prompt + budgetNote(timeout_ms ?? DEFAULT_TIMEOUT_MS),
         cwd,
         engine: tier.engine,
         model: model ?? tier.model,
@@ -93,6 +103,7 @@ server.registerTool(
 server.registerTool(
   "explore",
   {
+    _meta: { "anthropic/alwaysLoad": true },
     description:
       "Read-only codebase exploration, the cheap Explore. Prefer this over spawning the Explore subagent for locating/mapping code: it runs on Cursor's composer model (cheap/fast) and keeps file dumps out of your context — you get back only the conclusion plus concrete file:line references. Three modes: (a) `question` alone → broad fan-out search across the repo (follows naming conventions, checks multiple locations) returning file:line refs; (b) `question`+`files` → scoped answer about those files; (c) neither → a general project map. It LOCATES, it does not review/audit — use a Task subagent for judgment.",
     inputSchema: {
@@ -121,6 +132,7 @@ server.registerTool(
 server.registerTool(
   "read_slice",
   {
+    _meta: { "anthropic/alwaysLoad": true },
     description:
       "Read-only surgical read: the Cursor agent reads the given file(s) and returns ONLY the code relevant to `want` (exact lines with file:line), never the whole file. Use instead of Read when you need a specific function/section from large files — the full file never enters your context.",
     inputSchema: {
@@ -136,6 +148,7 @@ server.registerTool(
 server.registerTool(
   "run_filtered",
   {
+    _meta: { "anthropic/alwaysLoad": true },
     description:
       "Run a shell command via the Cursor agent and get back ONLY the relevant lines/summary — semantic filtering of huge output (build/test/log). Complements mechanical filters: use when the noise needs judgment to strip. The full output stays on Cursor's side.",
     inputSchema: {
@@ -153,6 +166,7 @@ server.registerTool(
 server.registerTool(
   "web_lookup",
   {
+    _meta: { "anthropic/alwaysLoad": true },
     description:
       "Delegate a web/documentation lookup to the Cursor agent (which has web access): library docs, API references, error messages, current versions. Cheap way to fetch info newer than your training data.",
     inputSchema: { query: z.string().describe("What to look up on the web."), ...routing },
@@ -187,7 +201,7 @@ server.registerTool(
     return format(
       "plan",
       await runCursor({
-        prompt: planPrompt(task),
+        prompt: planPrompt(task) + budgetNote(DEFAULT_TIMEOUT_MS),
         cwd,
         engine: tier.engine,
         model: model ?? tier.model,
@@ -218,7 +232,7 @@ server.registerTool(
         .int()
         .positive()
         .optional()
-        .describe("Max wall-clock ms. Default 600000 (10 min). Raise for build-heavy tasks."),
+        .describe("Max wall-clock ms. Default 1800000 (30 min). Raise for unusually long build-heavy tasks."),
       ...routing,
     },
   },
@@ -228,7 +242,7 @@ server.registerTool(
     return format(
       "build",
       await runCursor({
-        prompt: buildPrompt(plan),
+        prompt: buildPrompt(plan) + budgetNote(timeout_ms ?? DEFAULT_TIMEOUT_MS),
         cwd,
         engine: tier.engine,
         model: model ?? tier.model,

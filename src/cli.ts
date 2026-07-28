@@ -51,8 +51,18 @@ export const CURSOR_ENABLED = ["1", "true", "yes"].includes(
   (process.env.CURSOR_BRIDGE_ENABLE_CURSOR ?? "").toLowerCase(),
 );
 
-/** Timeout padrão (ms). Override via CURSOR_BRIDGE_TIMEOUT_MS. */
-export const DEFAULT_TIMEOUT_MS = Number(process.env.CURSOR_BRIDGE_TIMEOUT_MS ?? 600_000);
+/**
+ * Timeout padrão (ms): rede de segurança generosa contra travamentos reais, não orçamento de trabalho.
+ * Override via CURSOR_BRIDGE_TIMEOUT_MS.
+ */
+export const DEFAULT_TIMEOUT_MS = Number(process.env.CURSOR_BRIDGE_TIMEOUT_MS ?? 1_800_000);
+
+/** Nota de time budget anexada ao prompt de tarefas longas: o worker se auto-gerencia em vez de
+ *  ser morto cego ao estourar o timeout. */
+export function budgetNote(timeoutMs: number): string {
+  const min = Math.max(1, Math.round(timeoutMs / 60_000));
+  return `\n\n[Time budget: ~${min} min. If you are running low on time, stop and return partial results with a clear note on what remains — do not risk being cut off mid-work.]`;
+}
 
 /** Se truthy, loga o comando spawnado e espelha o stderr do child em tempo real. Debug. */
 export const DEBUG = ["1", "true", "yes"].includes((process.env.CURSOR_BRIDGE_DEBUG ?? "").toLowerCase());

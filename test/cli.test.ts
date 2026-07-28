@@ -4,9 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildCursorArgs, buildGrokArgs, buildCodexArgs, buildClaudeArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
-  parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
+  budgetNote, parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
   type SandboxSpec, type Engine,
 } from "../src/cli.js";
+
+describe("budgetNote", () => {
+  it("reports the effective timeout in rounded minutes", () => {
+    expect(budgetNote(600_000)).toContain("~10 min");
+    expect(budgetNote(1_800_000)).toContain("~30 min");
+  });
+});
 
 describe("resolveModel", () => {
   it("defaults to Composer 2.5 Fast (nunca auto; id plano, sem bracket)", () => {
