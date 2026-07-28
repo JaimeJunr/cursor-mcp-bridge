@@ -3,14 +3,14 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildCursorArgs, buildGrokArgs, buildCodexArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
+  buildCursorArgs, buildGrokArgs, buildCodexArgs, buildClaudeArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
   parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
   type SandboxSpec, type Engine,
 } from "../src/cli.js";
 
 describe("resolveModel", () => {
-  it("defaults to Composer 2.5 Fast (nunca auto)", () => {
-    expect(resolveModel()).toBe("composer-2.5[fast=true]");
+  it("defaults to Composer 2.5 Fast (nunca auto; id plano, sem bracket)", () => {
+    expect(resolveModel()).toBe("composer-2.5-fast");
   });
 
   it("ignores effort for auto (auto takes no bracket override)", () => {
@@ -30,7 +30,7 @@ describe("buildCursorArgs", () => {
   it("runs headless json with trust and a resolved model", () => {
     const args = buildCursorArgs({ prompt: "hi" });
     expect(args.slice(0, 4)).toEqual(["-p", "--output-format", "json", "--trust"]);
-    expect(args[args.indexOf("--model") + 1]).toBe("composer-2.5[fast=true]");
+    expect(args[args.indexOf("--model") + 1]).toBe("composer-2.5-fast");
     expect(args.at(-1)).toBe("hi");
   });
 
@@ -157,7 +157,7 @@ describe("buildGrokArgs", () => {
     expect(args[args.indexOf("--single") + 1]).toBe("do it");
     expect(args).toContain("--output-format");
     expect(args[args.indexOf("-m") + 1]).toBe("grok-4.5");
-    expect(args[args.indexOf("--reasoning-effort") + 1]).toBe("high");
+    expect(args[args.indexOf("--effort") + 1]).toBe("high"); // xAI CLI renomeou --reasoning-effort → --effort
     expect(args).toContain("--always-approve"); // autonomia é --always-approve, não --force
     expect(args).not.toContain("--trust");
   });
@@ -239,30 +239,64 @@ describe("buildCodexArgs", () => {
 
 describe("resolveTier", () => {
   const all: (e: Engine) => boolean = () => true;
-  const none: (e: Engine) => boolean = (e) => e === "cursor";
+  const noCodex: (e: Engine) => boolean = (e) => e !== "codex";
 
-  it("nível 1 é sempre Composer 2.5 Fast no cursor-agent", () => {
-    expect(resolveTier(1, all)).toEqual({ engine: "cursor", model: "composer-2.5[fast=true]" });
-  });
-
-  it("níveis 2/3 usam Grok 4.5 com effort crescente quando o grok existe", () => {
+  it("mapeia cada nível para a engine+modelo preferido (matriz mista 3 assinaturas)", () => {
+    expect(resolveTier(1, all)).toEqual({ engine: "codex", model: "gpt-5.6-luna" });
     expect(resolveTier(2, all)).toEqual({ engine: "grok", model: "grok-4.5", effort: "medium" });
-    expect(resolveTier(3, all)).toEqual({ engine: "grok", model: "grok-4.5", effort: "high" });
-  });
-
-  it("níveis 4/5 usam GPT-5.6 Sol no codex com effort crescente", () => {
+    expect(resolveTier(3, all)).toEqual({ engine: "codex", model: "gpt-5.6-terra", effort: "medium" });
     expect(resolveTier(4, all)).toEqual({ engine: "codex", model: "gpt-5.6-sol", effort: "medium" });
-    expect(resolveTier(5, all)).toEqual({ engine: "codex", model: "gpt-5.6-sol", effort: "high" });
+    expect(resolveTier(5, all)).toEqual({ engine: "claude", model: "opus" });
   });
 
-  it("cai para o cursor-agent quando grok/codex não estão instalados", () => {
-    expect(resolveTier(3, none)).toEqual({ engine: "cursor", model: "cursor-grok-4.5-high-fast" });
-    expect(resolveTier(5, none)).toEqual({ engine: "cursor", model: "gpt-5.6-sol-xhigh-fast" });
+  it("usa um modelo DISTINTO em cada nível (sem repetição)", () => {
+    const models = [1, 2, 3, 4, 5].map((l) => resolveTier(l, all).model);
+    expect(new Set(models).size).toBe(5);
+  });
+
+  it("cai para o cursor-agent equivalente só quando CURSOR habilitado e a engine preferida falta", () => {
+    expect(resolveTier(1, noCodex, true)).toEqual({ engine: "cursor", model: "composer-2.5-fast" });
+    expect(resolveTier(3, noCodex, true)).toEqual({ engine: "cursor", model: "gpt-5.6-terra-medium-fast" });
+  });
+
+  it("lança erro claro quando a engine preferida falta e o cursor está desabilitado (default)", () => {
+    expect(() => resolveTier(1, noCodex, false)).toThrow(/needs the 'codex' CLI/);
+    expect(() => resolveTier(5, (e) => e !== "claude", false)).toThrow(/needs the 'claude' CLI/);
   });
 
   it("rejeita nível fora de 1-5", () => {
     expect(() => resolveTier(0, all)).toThrow(/expected integer 1-5/);
     expect(() => resolveTier(6, all)).toThrow(/expected integer 1-5/);
+  });
+});
+
+describe("buildClaudeArgs", () => {
+  it("roda headless print json isolando MCP/settings do user, prompt posicional no fim", () => {
+    const args = buildClaudeArgs({ prompt: "do it", model: "opus" });
+    expect(args.slice(0, 3)).toEqual(["-p", "--output-format", "json"]);
+    expect(args).toContain("--strict-mcp-config"); // zero MCP servers (não sobe os do user)
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
+    expect(args).not.toContain("--bare"); // --bare quebra a auth ("Not logged in")
+    expect(args[args.indexOf("--model") + 1]).toBe("opus");
+    expect(args.at(-1)).toBe("do it");
+  });
+
+  it("auto-aprova com --dangerously-skip-permissions quando force (delegate)", () => {
+    expect(buildClaudeArgs({ prompt: "x", force: true })).toContain("--dangerously-skip-permissions");
+  });
+
+  it("não auto-aprova por padrão", () => {
+    expect(buildClaudeArgs({ prompt: "x" })).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("adiciona --resume no follow-up", () => {
+    const args = buildClaudeArgs({ prompt: "more", resume: "c-1" });
+    expect(args[args.indexOf("--resume") + 1]).toBe("c-1");
+  });
+
+  it("é selecionado pelo dispatcher buildArgs", () => {
+    const opts = { prompt: "hi", model: "opus" };
+    expect(buildArgs("claude", opts)).toEqual(buildClaudeArgs(opts));
   });
 });
 

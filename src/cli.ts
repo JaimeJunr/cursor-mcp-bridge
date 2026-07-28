@@ -4,7 +4,7 @@ import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 
 /** CLIs suportados. Cada engine tem dialeto de args e parser de saída próprios. */
-export type Engine = "cursor" | "grok" | "codex";
+export type Engine = "cursor" | "grok" | "codex" | "claude";
 
 /**
  * Binário do Cursor CLI. Default `cursor-agent` (NÃO `agent`: no PATH do user `agent` pode ser o
@@ -15,19 +15,23 @@ export const CURSOR_BIN = process.env.CURSOR_BIN ?? "cursor-agent";
 export const GROK_BIN = process.env.CURSOR_BRIDGE_GROK_BIN ?? "grok";
 /** Binário do Codex CLI. Override via CURSOR_BRIDGE_CODEX_BIN. */
 export const CODEX_BIN = process.env.CURSOR_BRIDGE_CODEX_BIN ?? "codex";
+/** Binário do Claude Code CLI. Override via CURSOR_BRIDGE_CLAUDE_BIN. */
+export const CLAUDE_BIN = process.env.CURSOR_BRIDGE_CLAUDE_BIN ?? "claude";
 
 /**
- * Modelo default: Composer 2.5 no modo Fast (bracket `fast=true`). NUNCA `auto` — o worker do bridge
- * precisa ser barato/rápido e determinístico. Override via CURSOR_BRIDGE_MODEL.
+ * Modelo default do fallback cursor (só usado quando CURSOR_ENABLED e o engine é cursor). O
+ * cursor-agent atual NÃO aceita mais o bracket `[fast=true]` — os ids viraram planos com sufixo
+ * (`composer-2.5-fast`). NUNCA `auto`. Override via CURSOR_BRIDGE_MODEL.
  */
-export const DEFAULT_MODEL = process.env.CURSOR_BRIDGE_MODEL ?? "composer-2.5[fast=true]";
+export const DEFAULT_MODEL = process.env.CURSOR_BRIDGE_MODEL ?? "composer-2.5-fast";
 
 /**
- * Modelo default do `explore`/`read_slice`/`run_filtered`/`web_lookup`: Composer 2.5 Fast. Mesmo
- * racional do DEFAULT_MODEL — localizar/ler/filtrar pede o modelo mais barato e ágil, não `auto`.
+ * Modelo barato de leitura do `explore`/`read_slice`/`run_filtered`/`web_lookup`: Composer 2.5 Fast.
+ * Mesmo racional do DEFAULT_MODEL — localizar/ler/filtrar pede o modelo mais barato e ágil, não `auto`.
  * Override via CURSOR_BRIDGE_EXPLORE_MODEL. Só se aplica quando o chamador não passa `model`.
+ * (A migração destes tools para codex+luna é feita num commit dedicado.)
  */
-export const EXPLORE_MODEL = process.env.CURSOR_BRIDGE_EXPLORE_MODEL ?? "composer-2.5[fast=true]";
+export const EXPLORE_MODEL = process.env.CURSOR_BRIDGE_EXPLORE_MODEL ?? "composer-2.5-fast";
 
 /**
  * Modelo codex que dispara o image_gen built-in (gpt-image-2 faz o trabalho pesado; effort baixo basta).
@@ -37,6 +41,15 @@ export const IMAGE_MODEL = process.env.CURSOR_BRIDGE_IMAGE_MODEL ?? "gpt-5.6-sol
 
 /** Se truthy, passa --force (roda comandos sem prompt). Default off por segurança. */
 export const FORCE = ["1", "true", "yes"].includes((process.env.CURSOR_BRIDGE_FORCE ?? "").toLowerCase());
+
+/**
+ * Fallback para o cursor-agent. O usuário cancelou a assinatura do Cursor, então por padrão os tiers
+ * NÃO caem no cursor quando a engine preferida (codex/grok/claude) falta — erram com mensagem clara.
+ * Reative o fallback (código do cursor continua íntegro) com CURSOR_BRIDGE_ENABLE_CURSOR=1.
+ */
+export const CURSOR_ENABLED = ["1", "true", "yes"].includes(
+  (process.env.CURSOR_BRIDGE_ENABLE_CURSOR ?? "").toLowerCase(),
+);
 
 /** Timeout padrão (ms). Override via CURSOR_BRIDGE_TIMEOUT_MS. */
 export const DEFAULT_TIMEOUT_MS = Number(process.env.CURSOR_BRIDGE_TIMEOUT_MS ?? 600_000);
@@ -73,6 +86,10 @@ const SANDBOX_ENGINE_RO: Record<Engine, string[]> = {
   cursor: [], // auth do cursor já vem no SANDBOX_HOME_RO base
   grok: [], // grok precisa de RW em ~/.grok (auth, skills e cache) — ver SANDBOX_ENGINE_RW
   codex: [], // codex precisa de RW em ~/.codex (state/cache/locks/socket) — ver SANDBOX_ENGINE_RW
+  // claude: SÓ a credencial de auth (oauth da assinatura). NUNCA ~/.claude inteiro — isso traz
+  // settings/agents/mcp.json de volta, o que reinfla o contexto (o worker roda com --bare +
+  // --append-system-prompt, então não precisa descobrir agents/rules no HOME).
+  claude: [".claude/.credentials.json", ".claude.json"],
 };
 /**
  * Subpaths do HOME RW por engine. Grok precisa de auth/skills/cache em ~/.grok; o codex tem
@@ -83,6 +100,9 @@ const SANDBOX_ENGINE_RW: Record<Engine, string[]> = {
   cursor: [],
   grok: [".grok"],
   codex: [".codex"],
+  // claude escreve estado de sessão/telemetria em ~/.claude ao rodar headless; sem RW o run pode
+  // falhar. Damos RW só em subpaths de estado, nunca settings/agents (que ficam no HOME isolado).
+  claude: [".claude/statsig", ".claude/projects", ".claude/todos", ".claude/shell-snapshots"],
 };
 /** Subpaths do HOME liberados RW: caches de build (acelera runs seguidos). */
 const SANDBOX_HOME_RW = [".gradle", ".m2", ".cache/uv", ".cache/pip"];
@@ -238,12 +258,13 @@ export function buildCursorArgs(opts: RunOpts): string[] {
 
 /**
  * Args do Grok CLI (`grok`). Dialeto próprio: prompt é VALOR de `--single`, effort é flag separada
- * (`--reasoning-effort`), autonomia é `--always-approve` (não `--force`). Função pura — testável.
+ * (`--effort` — o xAI CLI atual renomeou `--reasoning-effort` → `--effort`), autonomia é
+ * `--always-approve` (não `--force`). Função pura — testável.
  */
 export function buildGrokArgs(opts: RunOpts): string[] {
   const args = ["--single", opts.prompt, "--output-format", "json"];
   if (opts.model) args.push("-m", opts.model);
-  if (opts.effort) args.push("--reasoning-effort", opts.effort);
+  if (opts.effort) args.push("--effort", opts.effort);
   args.push("--always-approve");
   if (opts.resume) args.push("-r", opts.resume);
   return args;
@@ -271,10 +292,36 @@ export function buildCodexArgs(opts: RunOpts): string[] {
   return ["exec", ...flags, ...sep, opts.prompt];
 }
 
+/**
+ * Args do Claude Code CLI (`claude -p`). Dialeto próprio: `--print` headless, prompt posicional,
+ * autonomia via `--dangerously-skip-permissions`, resume via `--resume <id>`. Saída `--output-format
+ * json` tem a forma `{result, session_id}` (mesma do cursor → parseCliJson).
+ *
+ * NÃO usar `--bare`: ele quebra a resolução de auth (a CLI retorna "Not logged in"). Em vez disso
+ * isolamos a config do usuário como o sandbox faz para os outros engines: `--strict-mcp-config` (sem
+ * `--mcp-config` → ZERO MCP servers, o codex/cursor não sobem os MCP do user e o claude também não) e
+ * `--setting-sources project` (ignora ~/.claude/settings, o HOME isolado do sandbox já está vazio).
+ * Função pura — testável.
+ */
+export function buildClaudeArgs(opts: RunOpts): string[] {
+  const args = [
+    "-p", "--output-format", "json",
+    "--strict-mcp-config",
+    "--setting-sources", "project",
+  ];
+  if (opts.model) args.push("--model", opts.model);
+  // autonomia: em headless o claude bloqueia em permissões sem isso. O sandbox contém o raio ao cwd.
+  if (FORCE || opts.force) args.push("--dangerously-skip-permissions");
+  if (opts.resume) args.push("--resume", opts.resume);
+  args.push(opts.prompt);
+  return args;
+}
+
 /** Despacha a montagem de args pelo engine. */
 export function buildArgs(engine: Engine, opts: RunOpts): string[] {
   if (engine === "grok") return buildGrokArgs(opts);
   if (engine === "codex") return buildCodexArgs(opts);
+  if (engine === "claude") return buildClaudeArgs(opts);
   return buildCursorArgs(opts);
 }
 
@@ -344,7 +391,9 @@ export function binExists(bin: string): boolean {
 /** true se o CLI do engine está instalado. cursor é sempre assumido presente. */
 export function hasEngine(engine: Engine): boolean {
   if (engine === "cursor") return true;
-  return binExists(engine === "grok" ? GROK_BIN : CODEX_BIN);
+  if (engine === "grok") return binExists(GROK_BIN);
+  if (engine === "codex") return binExists(CODEX_BIN);
+  return binExists(CLAUDE_BIN); // claude
 }
 
 export interface Tier {
@@ -353,41 +402,54 @@ export interface Tier {
   effort?: string;
 }
 
+/** Entrada da matriz de tiers: engine/modelo preferido + o id equivalente no cursor (fallback). */
+interface TierEntry {
+  primary: Tier;
+  /** Modelo cursor-agent equivalente, usado só quando CURSOR_ENABLED e a engine preferida falta. */
+  cursorModel: string;
+}
+
 /**
- * Roteia o nível (1-5) do `delegate` para (engine, modelo, effort). A dificuldade sobe com o nível:
- * 1 = Composer 2.5 Fast (barato); 2/3 = Grok 4.5 (effort médio/máx); 4/5 = GPT-5.6 Sol (médio/máx).
- * Quando o CLI preferido (grok/codex) não está instalado, cai para o modelo equivalente no
- * cursor-agent — "usa o grok/codex se tiver, senão o cursor-agent". `has` é injetado para teste.
+ * Matriz do `delegate`: cada nível usa um MODELO DISTINTO, sem repetir entre níveis, escalando a
+ * dificuldade e distribuindo pelas 3 assinaturas (codex/grok/claude). O cursor saiu do caminho
+ * padrão (assinatura cancelada) — vira fallback só sob CURSOR_ENABLED. Leitura barata (explore/
+ * read_slice) reaproveita o modelo do nível 1 (gpt-5.6-luna).
  */
-export function resolveTier(level: number, has: (e: Engine) => boolean = hasEngine): Tier {
-  switch (level) {
-    case 1:
-      return { engine: "cursor", model: "composer-2.5[fast=true]" };
-    case 2:
-      return has("grok")
-        ? { engine: "grok", model: "grok-4.5", effort: "medium" }
-        : { engine: "cursor", model: "cursor-grok-4.5-high-fast" };
-    case 3:
-      return has("grok")
-        ? { engine: "grok", model: "grok-4.5", effort: "high" }
-        : { engine: "cursor", model: "cursor-grok-4.5-high-fast" };
-    case 4:
-      return has("codex")
-        ? { engine: "codex", model: "gpt-5.6-sol", effort: "medium" }
-        : { engine: "cursor", model: "gpt-5.6-sol-high-fast" };
-    case 5:
-      return has("codex")
-        ? { engine: "codex", model: "gpt-5.6-sol", effort: "high" }
-        : { engine: "cursor", model: "gpt-5.6-sol-xhigh-fast" };
-    default:
-      throw new Error(`invalid delegate level: received ${level}, expected integer 1-5`);
-  }
+const TIERS: Record<number, TierEntry> = {
+  1: { primary: { engine: "codex", model: "gpt-5.6-luna" }, cursorModel: "composer-2.5-fast" },
+  2: { primary: { engine: "grok", model: "grok-4.5", effort: "medium" }, cursorModel: "cursor-grok-4.5-medium-fast" },
+  3: { primary: { engine: "codex", model: "gpt-5.6-terra", effort: "medium" }, cursorModel: "gpt-5.6-terra-medium-fast" },
+  4: { primary: { engine: "codex", model: "gpt-5.6-sol", effort: "medium" }, cursorModel: "gpt-5.6-sol-medium-fast" },
+  5: { primary: { engine: "claude", model: "opus" }, cursorModel: "claude-opus-4-8-high-fast" },
+};
+
+/**
+ * Roteia o nível (1-5) para (engine, modelo, effort). Usa a engine preferida do nível se instalada.
+ * Se faltar: cai para o cursor-agent SÓ quando CURSOR_ENABLED (assinatura reativada); senão lança
+ * erro claro dizendo o que instalar. `has`/`cursorEnabled` são injetados para teste.
+ */
+export function resolveTier(
+  level: number,
+  has: (e: Engine) => boolean = hasEngine,
+  cursorEnabled: boolean = CURSOR_ENABLED,
+): Tier {
+  const entry = TIERS[level];
+  if (!entry) throw new Error(`invalid delegate level: received ${level}, expected integer 1-5`);
+  if (has(entry.primary.engine)) return entry.primary;
+  if (cursorEnabled) return { engine: "cursor", model: entry.cursorModel };
+  throw new Error(
+    `delegate level ${level} needs the '${entry.primary.engine}' CLI, which is not installed. ` +
+    "Install it, pick another level, or set CURSOR_BRIDGE_ENABLE_CURSOR=1 to fall back to cursor-agent.",
+  );
 }
 
 /** Roda o CLI do engine em modo headless e devolve o resultado parseado. */
 export function runCursor(opts: RunOpts): Promise<CliResult> {
   const engine = opts.engine ?? "cursor";
-  const bin = engine === "grok" ? GROK_BIN : engine === "codex" ? CODEX_BIN : CURSOR_BIN;
+  const bin = engine === "grok" ? GROK_BIN
+    : engine === "codex" ? CODEX_BIN
+    : engine === "claude" ? CLAUDE_BIN
+    : CURSOR_BIN;
   const engineArgs = buildArgs(engine, opts);
   const workspace = opts.cwd ?? process.cwd();
 

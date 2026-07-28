@@ -38,7 +38,7 @@ server.registerTool(
   "delegate",
   {
     description:
-      "Delegate a task to a headless coding-agent CLI — the cheap/fast worker with full tool access (read, edit, shell) in cwd. As the orchestrator, offload grunt-work here instead of spending your own expensive tokens: commits, opening/updating PRs, writing tickets/comments, small mechanical or 2-line edits, running a build/test and fixing it, and routine implementation. The `level` (1-5) picks the model by task difficulty: 1=Composer 2.5 Fast (cheapest), 2=Grok 4.5, 3=Grok 4.5 (max effort), 4=GPT-5.6 Sol, 5=GPT-5.6 Sol (max effort). Pick the lowest level that can do the job. Give a complete, self-contained instruction — the worker does not see your context.",
+      "Delegate a task to a headless coding-agent CLI — the cheap/fast worker with full tool access (read, edit, shell) in cwd. As the orchestrator, offload grunt-work here instead of spending your own expensive tokens: commits, opening/updating PRs, writing tickets/comments, small mechanical or 2-line edits, running a build/test and fixing it, and routine implementation. The `level` (1-5) picks a DISTINCT model by task difficulty, spread across the codex/grok/claude subscriptions: 1=GPT-5.6 Luna (codex, cheapest), 2=Grok 4.5 (grok), 3=GPT-5.6 Terra (codex), 4=GPT-5.6 Sol (codex), 5=Claude Opus (claude). Pick the lowest level that can do the job. Give a complete, self-contained instruction — the worker does not see your context.",
     inputSchema: {
       prompt: z.string().describe("The complete task prompt for the worker agent."),
       level: z
@@ -46,7 +46,7 @@ server.registerTool(
         .int()
         .min(1)
         .max(5)
-        .describe("Task difficulty 1-5. 1=Composer 2.5 Fast, 2=Grok 4.5, 3=Grok 4.5 max, 4=GPT-5.6 Sol, 5=GPT-5.6 Sol max. Use the lowest level that fits."),
+        .describe("Task difficulty 1-5, each a distinct model: 1=GPT-5.6 Luna (codex), 2=Grok 4.5 (grok), 3=GPT-5.6 Terra (codex), 4=GPT-5.6 Sol (codex), 5=Claude Opus (claude). Use the lowest level that fits."),
       timeout_ms: z
         .number()
         .int()
