@@ -23,11 +23,20 @@ describe("decide — web tools", () => {
     expect(res.keys).toContain("preload");
     expect(res.text).toMatch(/web_lookup/);
     expect(res.text).toMatch(/ToolSearch|deferred/);
+    expect(res.redirect).toBe(true);
   });
 
   it("dedups: WebSearch já nudado nesta sessão → null", () => {
     const res = decide({ tool_name: "WebFetch", tool_input: {}, seen: new Set(["web", "preload"]) });
     expect(res).toBeNull();
+  });
+
+  it("fail-open: depois de marcar as chaves, a segunda WebSearch passa", () => {
+    const seen = new Set<string>();
+    const first = decide({ tool_name: "WebSearch", tool_input: {}, seen });
+    for (const key of first.keys) seen.add(key);
+    const second = decide({ tool_name: "WebSearch", tool_input: {}, seen });
+    expect(second).toBeNull();
   });
 });
 
@@ -36,6 +45,7 @@ describe("decide — Grep/Glob (preload once)", () => {
     const res = decide({ tool_name: "Grep", tool_input: {}, seen: new Set() });
     expect(res.keys).toEqual(["preload"]);
     expect(res.text).toMatch(/ToolSearch|deferred/);
+    expect(res.redirect).toBeFalsy();
   });
 
   it("segunda Grep na mesma sessão → null (neutraliza o ruído)", () => {
@@ -49,6 +59,7 @@ describe("decide — Read (threshold 300, dedup por arquivo)", () => {
     const res = decide({ tool_name: "Read", tool_input: { file_path: "/x/big.ts" }, seen: new Set() }, fakeFs(300));
     expect(res.keys).toContain("read:/x/big.ts");
     expect(res.text).toMatch(/read_slice/);
+    expect(res.redirect).toBe(true);
   });
 
   it("arquivo de 299 linhas → null (abaixo do threshold)", () => {
@@ -120,6 +131,7 @@ describe("decide — Bash de mutação (grunt-work → delegate)", () => {
     expect(res.keys).toContain("bash-mutate");
     expect(res.keys).toContain("preload");
     expect(res.text).toMatch(/delegate/);
+    expect(res.redirect).toBeFalsy();
   });
 
   it("gh pr create → nudge delegate", () => {

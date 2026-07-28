@@ -19,11 +19,13 @@
  *  - Preload once: the first qualifying nudge of a session also carries the
  *    one-time reminder to run ToolSearch, because these MCP tools are deferred
  *    and lose to the always-loaded native Read/Grep until their schemas load.
- *  - Non-blocking: always allows the tool; only injects `additionalContext`.
+ *  - Fail-open: web e Read grande podem ser bloqueados só uma vez; os demais
+ *    casos apenas injetam `additionalContext`.
  *  - Never breaks the tool: any error → print nothing, exit 0.
  *
  * Env:
  *  - CURSOR_BRIDGE_HOOK_MIN_LINES: line threshold for the Read nudge (default 300).
+ *  - CURSOR_BRIDGE_HOOK_MODE: off | nudge | redirect (padrão redirect).
  */
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -32,6 +34,7 @@ import { pathToFileURL } from "node:url";
 
 const PARSED_MIN_LINES = Number(process.env.CURSOR_BRIDGE_HOOK_MIN_LINES);
 const MIN_LINES = Number.isFinite(PARSED_MIN_LINES) && PARSED_MIN_LINES > 0 ? PARSED_MIN_LINES : 300;
+const HOOK_MODE = (process.env.CURSOR_BRIDGE_HOOK_MODE ?? "redirect").toLowerCase(); // off | nudge | redirect
 const BIG_BYTES = 2 * 1024 * 1024; // acima disto não conta linhas — já é "grande"
 const SKIP_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|wasm|mp4|mov|woff2?)$/i;
 
@@ -189,9 +192,9 @@ export function buildAgentUpdatedInput(toolInput, routeFn) {
 }
 
 /**
- * Pure decision: given the tool call and the set of nudges already fired this
- * session, return the nudge to emit ({ keys, text }) or null. fs deps are
- * injectable for testing.
+ * Decisão pura: dada a chamada de tool e o conjunto de nudges já disparados nesta
+ * sessão, retorna o nudge a emitir ({ keys, text, redirect }) ou null. As dependências
+ * de fs são injetáveis para testes.
  * @example decide({ tool_name: "WebSearch", tool_input: {}, seen: new Set() })
  */
 export function decide(input, deps = {}) {
@@ -203,9 +206,13 @@ export function decide(input, deps = {}) {
   if (!base) return null;
   // O primeiro nudge da sessão carrega junto o lembrete único de preload.
   if (base.key !== "preload" && !seen.has("preload")) {
-    return { keys: [base.key, "preload"], text: `${base.text}\n\n${PRELOAD_TEXT}` };
+    return {
+      keys: [base.key, "preload"],
+      text: `${base.text}\n\n${PRELOAD_TEXT}`,
+      redirect: base.redirect === true,
+    };
   }
-  return { keys: [base.key], text: base.text };
+  return { keys: [base.key], text: base.text, redirect: base.redirect === true };
 }
 
 /** Decisão base por tipo de tool, já respeitando o dedup (`seen`). */
@@ -214,7 +221,7 @@ function baseDecision(input, { stat, read, minLines }, seen) {
   const ti = input?.tool_input ?? {};
 
   if (tool === "WebSearch" || tool === "WebFetch") {
-    return seen.has("web") ? null : { key: "web", text: WEB_TEXT };
+    return seen.has("web") ? null : { key: "web", text: WEB_TEXT, redirect: true };
   }
 
   // Bash de MUTAÇÃO (commit/PR/ticket/branch) → offload pro delegate, 1× por sessão.
@@ -253,6 +260,7 @@ function baseDecision(input, { stat, read, minLines }, seen) {
     const shown = lines === Infinity ? "very large" : `${lines}-line`;
     return {
       key,
+      redirect: true,
       text:
         `cursor-bridge available: ${file} is a ${shown} file. If you will NOT Edit it, use ` +
         `read_slice(files, want) to load only the needed lines instead of Read (which puts the whole ` +
@@ -291,6 +299,21 @@ function saveSeen(p, set) {
 function nudge(text) {
   process.stdout.write(
     JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: text } }),
+  );
+}
+
+const FAILOPEN_SUFFIX =
+  " — If that cursor-bridge tool isn't loaded yet, run the ToolSearch preload first; if you genuinely need this native tool's raw result, just call it again and it will be allowed (this redirect fires only once).";
+
+function denyRedirect(reason) {
+  process.stdout.write(
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: reason + FAILOPEN_SUFFIX,
+      },
+    }),
   );
 }
 
@@ -357,9 +380,11 @@ async function main() {
   const seen = loadSeen(path);
   const res = decide({ tool_name: data?.tool_name, tool_input: data?.tool_input, seen });
   if (!res) process.exit(0);
+  if (HOOK_MODE === "off") process.exit(0);
   for (const k of res.keys) seen.add(k);
   saveSeen(path, seen);
-  nudge(res.text);
+  if (HOOK_MODE === "redirect" && res.redirect) denyRedirect(res.text);
+  else nudge(res.text);
   process.exit(0);
 }
 
