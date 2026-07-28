@@ -10,7 +10,7 @@ import {
 } from "./prompts.js";
 import { logUsage, readUsage, aggregate } from "./usage.js";
 
-const server = new McpServer({ name: "cursor-mcp-bridge", version: "0.4.0" });
+const server = new McpServer({ name: "cursor-mcp-bridge", version: "0.5.0" });
 
 // Params de roteamento compartilhados.
 const routing = {
