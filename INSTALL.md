@@ -176,7 +176,7 @@ Report the connection status back to the user.
 
 Registration alone is not enough — the bridge tools are **deferred** and lose to native
 `Read`/`Grep`/`WebSearch` by default. Wire the shipped hook (`hooks/prefer-cursor-bridge.mjs`)
-into `settings.json` for `PreToolUse`, `SessionStart`, and `Agent|Task`. The exact JSON blocks
+into `settings.json` for `PreToolUse`, `SessionStart`, and `SubagentStart`. The exact JSON blocks
 and the reasoning are in [`README.md` → "Make the agent actually use it"](README.md#make-the-agent-actually-use-it).
 Do this step only for Claude Code; other hosts do not run these hooks.
 

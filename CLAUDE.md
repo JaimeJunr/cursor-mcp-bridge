@@ -191,8 +191,9 @@ points, all in `cli.ts`:
 ## The hook (`hooks/prefer-cursor-bridge.mjs`)
 
 Ships separately from the server: a hook the host wires (in its `settings.json`) as a `PreToolUse`
-matcher for `Read|Grep|Glob|WebSearch|WebFetch|Bash` and `Agent|Task`, plus a `SessionStart` entry —
-each pointing at `hooks/prefer-cursor-bridge.mjs`. It steers the agent toward the bridge. Env
+matcher for `Read|Grep|Glob|WebSearch|WebFetch|Bash|Edit|Write` (main-loop nudges), plus a
+`SessionStart` entry and a `SubagentStart` entry — each pointing at
+`hooks/prefer-cursor-bridge.mjs`. It steers the agent toward the bridge. Env
 `CURSOR_BRIDGE_HOOK_MODE` = `off` | `nudge` | `redirect` (default **`redirect`**): `off` does
 nothing; `nudge` is the old non-blocking `additionalContext` behavior; `redirect` returns
 `permissionDecision: "deny"` (via `denyRedirect()`) for the two safe-to-block cases. On `Bash` it
@@ -218,29 +219,24 @@ trims it). Design constraints, all tested in `test/hook.test.ts`:
   tool, but agents often use `Bash grep` (matches no matcher), so the preload never arrived.
   `sessionStartContext()` injects it as `additionalContext` before the first tool decision and
   pre-marks `preload` in the dedup file so the PreToolUse piggyback never repeats it.
-- Fail-open on errors: any error → print nothing, exit 0. Agent/Task and SessionStart paths are
+- Fail-open on errors: any error → print nothing, exit 0. SubagentStart and SessionStart paths are
   unchanged by redirect mode.
 - Threshold for the large-Read redirect/nudge is `CURSOR_BRIDGE_HOOK_MIN_LINES` (default 300).
 
-The hook also matches **`Agent|Task`** to reach spawned subagents (`buildAgentUpdatedInput` +
-`handleAgent`). When `subagent_type === "Explore"`, `agentPref()` appends `EXPLORE_EXTRA` — an extra
-line telling that run (spawned on the orchestrator's expensive model) to route all reading through
+**`SubagentStart` reaches spawned subagents.** Main-loop PreToolUse nudges never reach subagents, so
+the hook wires a dedicated `SubagentStart` entry. When `hook_event_name === "SubagentStart"`,
+`main()` emits `{ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext:
+subagentStartContext(data.agent_type) } }`. Pure `subagentStartContext(agent_type)` reuses
+`AGENT_PREF_BODY` and appends `EXPLORE_EXTRA` when `agent_type === "Explore"` — an extra line
+telling that run (spawned on the orchestrator's expensive model) to route all reading through
 `explore`/`read_slice` (which run on Codex Luna). `sessionStartContext()` carries the matching
-main-loop steer: prefer calling `explore()` directly over spawning the Explore subagent.
-Subagents never see the main-loop nudges, and the context-mode plugin's own
-`Agent|Task` hook appends a "route everything through context-mode" block that never mentions the
-bridge. **Critical constraint:** multiple PreToolUse hooks returning `updatedInput` for one tool do
-NOT merge — last-to-finish-wins, non-deterministic. So `handleAgent` **imports context-mode's live
-`routing.mjs`** (`CONTEXT_MODE_ROUTING`, default marketplace path), takes the prompt it would
-produce (already carrying context-mode's block), and appends the bridge preference — so whoever
-wins the race, context-mode's block survives. If that import fails, inject **nothing** (never
-clobber context-mode; that's the invariant). `CURSOR_BRIDGE_AGENT_DELAY_MS` (default 350ms) biases
-the race toward this hook by finishing last. This path bypasses the session dedup (every subagent
-needs its own injection); idempotency is by the `CURSOR_BRIDGE_MARKER` already being in the prompt.
+main-loop steer: prefer calling `explore()` directly over spawning the Explore subagent. The bridge
+and context-mode coexist without a race: they use separate channels (context-mode may still do its
+own thing; the bridge injects via `additionalContext` only). Fail-open/non-throwing as elsewhere.
 
-When changing hook behavior, update the pure functions (`decide`, `buildAgentUpdatedInput`) not the
-I/O wrappers (`main`/`handleAgent`), and add/adjust a case in `test/hook.test.ts` — the test
-imports the `.mjs` directly and injects fakes for fs and context-mode's route function.
+When changing hook behavior, update the pure functions (`decide`, `sessionStartContext`,
+`subagentStartContext`) not the I/O wrapper (`main`), and add/adjust a case in `test/hook.test.ts`
+— the test imports the `.mjs` directly and injects fakes for fs.
 
 ## Conventions
 

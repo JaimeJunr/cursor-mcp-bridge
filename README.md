@@ -95,8 +95,6 @@ have their own approval settings — consult the host.
 | `CURSOR_BRIDGE_LOG` | _(off)_ | Path to a JSONL file; when set, every call logs `{tool, outChars}` for `bridge_stats`. |
 | `CURSOR_BRIDGE_HOOK_MODE` | `redirect` | Hook behavior: `off` (no-op), `nudge` (non-blocking `additionalContext` only), or `redirect` (deny once + name bridge tool for WebSearch/WebFetch and whole-file large Read; fail-open on retry). Grep/Glob/Bash/Edit/Write stay nudge-only. |
 | `CURSOR_BRIDGE_HOOK_MIN_LINES` | `300` | Line threshold above which the optional hook (below) redirects/nudges whole-file Read toward `read_slice`. |
-| `CURSOR_BRIDGE_AGENT_DELAY_MS` | `350` | Delay before the `Agent\|Task` injection emits, to win the last-wins race vs context-mode. `0` disables. |
-| `CONTEXT_MODE_ROUTING` | _(marketplace path)_ | Override path to context-mode's `routing.mjs` (imported to preserve its block in subagents). |
 
 > **Security:** `delegate`, `build`, and `run_filtered` have full access and auto-approve their
 > work. `explore`, `read_slice`, and `web_lookup` use Codex's read-only sandbox. `plan` is hard
@@ -189,37 +187,36 @@ regardless of how the agent searches.
 On `SessionStart` the hook emits the `ToolSearch` preload as `additionalContext` and pre-marks
 `preload` as seen in the session's dedup file, so the PreToolUse piggyback never repeats it.
 
-### Reaching subagents too (`Agent|Task` matcher)
+### Reaching subagents too (`SubagentStart`)
 
-The nudges above only steer the **main loop**. Spawned subagents never see them —
-and if you also run the [context-mode](https://github.com/) plugin, its own
-`Agent|Task` hook appends a strong "route everything through context-mode" block
-to each subagent prompt that never mentions the bridge, so subagents are born
-blind to it. Wire this hook for `Agent|Task` as well to fix that:
+The nudges above only steer the **main loop**. Spawned subagents never see them,
+so wire the same hook for `SubagentStart` as well:
 
 ```json
-{ "matcher": "Agent|Task",
-  "hooks": [{ "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-cursor-bridge.mjs", "timeout": 10 }] }
+{
+  "hooks": {
+    "SubagentStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-cursor-bridge.mjs" }
+        ]
+      }
+    ]
+  }
+}
 ```
 
-On an `Agent`/`Task` call the hook appends a compact cursor-bridge preference
-(plus the `ToolSearch` preload line) to the subagent's prompt via `updatedInput`.
-When `subagent_type` is `Explore` it appends an extra line: that Explore run was spawned on the
+On `SubagentStart` the hook injects a compact cursor-bridge preference into every
+spawned subagent via `additionalContext` (`subagentStartContext(agent_type)`).
+When `agent_type` is `Explore` it appends an extra line: that Explore run was spawned on the
 orchestrator's expensive model (Explore inherits the session model, capped at Opus), so it should
 route **all** reading through `explore`/`read_slice` (which run on Codex Luna) and
 keep the expensive shell to orchestration only.
 
-> **Coexisting with context-mode.** Multiple PreToolUse hooks returning
-> `updatedInput` for one tool do **not** merge — it's last-to-finish-wins,
-> non-deterministic. To never clobber context-mode's block, this hook **imports
-> context-mode's live routing**, takes the prompt it would produce (already
-> carrying its block), and appends the bridge preference to it. So whoever wins
-> the race, context-mode's block survives; the bridge preference lands whenever
-> **this** hook wins — which `CURSOR_BRIDGE_AGENT_DELAY_MS` (default `350`ms)
-> biases toward by finishing after context-mode's heavier hook. If context-mode's
-> routing can't be imported the hook injects **nothing** (preserving context-mode
-> is the invariant). Set `CONTEXT_MODE_ROUTING` to point at a non-default path,
-> or `CURSOR_BRIDGE_AGENT_DELAY_MS=0` to disable the delay.
+> **Coexisting with context-mode.** The bridge and context-mode use separate channels
+> (context-mode may still do its own thing; this hook only emits `additionalContext`),
+> so they coexist cleanly — no `updatedInput` race, no delay, no import of
+> context-mode's routing.
 
 **2. Preload any still-deferred tools.** The five core tools are already `alwaysLoad` on
 Claude Code ≥2.1.121. For secondary tools (or older hosts), tell the agent to load schemas

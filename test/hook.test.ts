@@ -1,13 +1,6 @@
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — hook is plain .mjs sem types; só a lógica pura importa aqui.
-import { decide, buildAgentUpdatedInput, sessionStartContext, CURSOR_BRIDGE_MARKER } from "../hooks/prefer-cursor-bridge.mjs";
-
-/** routeFn falso: imita o context-mode anexando seu bloco ao campo de prompt. */
-const CM_BLOCK = "\n\n<context_window_protection>CTX</context_window_protection>";
-const fakeRoute = (field = "prompt") => (ti: Record<string, unknown>) => ({
-  action: "modify",
-  updatedInput: { ...ti, [field]: String(ti[field] ?? "") + CM_BLOCK },
-});
+import { decide, sessionStartContext, subagentStartContext } from "../hooks/prefer-cursor-bridge.mjs";
 
 /** fs falso: N linhas num arquivo "grande o suficiente" em bytes mas abaixo do teto. */
 const fakeFs = (lines: number) => ({
@@ -177,69 +170,21 @@ describe("decide — Edit/Write (execução self-contained → delegate)", () =>
   });
 });
 
-describe("buildAgentUpdatedInput — injeção no subagent", () => {
-  it("preserva o bloco do context-mode E anexa a preferência cursor-bridge", () => {
-    const res = buildAgentUpdatedInput({ prompt: "faça X" }, fakeRoute());
-    expect(res.prompt).toContain("faça X");
-    expect(res.prompt).toContain("CTX"); // bloco do context-mode sobrevive
-    expect(res.prompt).toContain(CURSOR_BRIDGE_MARKER);
-    expect(res.prompt).toMatch(/read_slice|explore|web_lookup/);
-    expect(res.prompt).toMatch(/ToolSearch/);
+describe("subagentStartContext — contexto injetado no subagente", () => {
+  it("retorna a preferência cursor-bridge para um subagente comum", () => {
+    const text = subagentStartContext("general-purpose");
+    expect(text).toMatch(/read_slice|explore|web_lookup/);
+    expect(text).toMatch(/ToolSearch/);
   });
 
-  it("idempotente: prompt já contém o marcador → null (não injeta 2×)", () => {
-    const res = buildAgentUpdatedInput({ prompt: `oi ${CURSOR_BRIDGE_MARKER}` }, fakeRoute());
-    expect(res).toBeNull();
+  it("agent_type Explore inclui o reforço específico", () => {
+    const text = subagentStartContext("Explore");
+    expect(text).toMatch(/Explore run|you are an explore/i);
+    expect(text).toMatch(/composer/i);
   });
 
-  it("subagent_type Explore → injeta reforço específico (tudo via cursor-bridge, composer)", () => {
-    const res = buildAgentUpdatedInput({ prompt: "ache X", subagent_type: "Explore" }, fakeRoute());
-    expect(res.prompt).toContain(CURSOR_BRIDGE_MARKER);
-    expect(res.prompt).toMatch(/Explore run|you are an explore/i);
-    expect(res.prompt).toMatch(/composer/i);
-  });
-
-  it("subagent comum (não-Explore) → NÃO leva o reforço de Explore", () => {
-    const res = buildAgentUpdatedInput({ prompt: "faça X", subagent_type: "general-purpose" }, fakeRoute());
-    expect(res.prompt).not.toMatch(/Explore run/i);
-  });
-
-  it("detecta o campo correto quando o subagent usa 'question' em vez de 'prompt'", () => {
-    const res = buildAgentUpdatedInput({ question: "onde está Y?" }, fakeRoute("question"));
-    expect(res.question).toContain("onde está Y?");
-    expect(res.question).toContain(CURSOR_BRIDGE_MARKER);
-  });
-
-  it("routeFn que lança → null (não arrisca clobber do context-mode)", () => {
-    const res = buildAgentUpdatedInput({ prompt: "z" }, () => {
-      throw new Error("context-mode indisponível");
-    });
-    expect(res).toBeNull();
-  });
-
-  it("routeFn sem action modify → null", () => {
-    const res = buildAgentUpdatedInput({ prompt: "z" }, () => null);
-    expect(res).toBeNull();
-  });
-
-  it("toolInput sem campo de prompt conhecido → usa 'prompt', sem literal 'undefined'", () => {
-    const route = (ti: Record<string, unknown>) => ({
-      action: "modify",
-      updatedInput: { ...ti, prompt: "" + CM_BLOCK },
-    });
-    const res = buildAgentUpdatedInput({ foo: "bar" }, route);
-    expect(res.prompt).toContain("CTX");
-    expect(res.prompt).toContain(CURSOR_BRIDGE_MARKER);
-    expect(res.prompt).not.toContain("undefined");
-  });
-
-  it("preserva outros campos que o context-mode alterou (ex.: subagent_type)", () => {
-    const route = (ti: Record<string, unknown>) => ({
-      action: "modify",
-      updatedInput: { ...ti, prompt: String(ti.prompt) + CM_BLOCK, subagent_type: "general-purpose" },
-    });
-    const res = buildAgentUpdatedInput({ prompt: "w", subagent_type: "Bash" }, route);
-    expect(res.subagent_type).toBe("general-purpose");
-    expect(res.prompt).toContain(CURSOR_BRIDGE_MARKER);
+  it("tipos diferentes de Explore não recebem o reforço específico", () => {
+    expect(subagentStartContext("general-purpose")).not.toMatch(/Explore run/i);
+    expect(subagentStartContext("explore")).not.toMatch(/Explore run/i);
   });
 });
