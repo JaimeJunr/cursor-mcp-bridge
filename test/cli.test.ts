@@ -248,11 +248,27 @@ describe("buildCodexArgs", () => {
     expect(args.at(-1)).toBe("fix it"); // prompt é posicional no fim
   });
 
-  it("read-only (mode) usa -s read-only + approval_policy never, sem bypass total", () => {
-    const args = buildCodexArgs({ prompt: "read", model: "gpt-5.6-luna", mode: "ask" });
+  it("read-only (mode) SEM bwrap externo usa -s read-only do codex + approval_policy never", () => {
+    const args = buildCodexArgs({ prompt: "read", model: "gpt-5.6-luna", mode: "ask" }); // sandboxed=false
     expect(args[args.indexOf("-s") + 1]).toBe("read-only");
     expect(args).toContain('approval_policy="never"');
     expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
+  it("read-only (mode) SOB bwrap externo (sandboxed) usa bypass, NÃO -s read-only (evita nested namespace)", () => {
+    // Regressão: `codex -s read-only` cria um sandbox interno; aninhado dentro do bwrap do bridge ele
+    // quebra com "bwrap: No permissions to create new namespace". Com bwrap externo o read-only vem
+    // do --ro-bind do workspace, então o codex roda em bypass (não aninha).
+    const args = buildCodexArgs({ prompt: "read", model: "gpt-5.6-luna", mode: "ask" }, true);
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args).not.toContain("read-only");
+    expect(args).not.toContain("-s");
+  });
+
+  it("buildArgs repassa sandboxed ao codex (mode+sandboxed → bypass)", () => {
+    const opts = { prompt: "read", mode: "ask" as const };
+    expect(buildArgs("codex", opts, true)).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(buildArgs("codex", opts, true)).not.toContain("read-only");
   });
 
   it("sem mode usa o bypass total (delegate/generate_image podem escrever)", () => {

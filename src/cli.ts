@@ -323,14 +323,18 @@ export function buildGrokArgs(opts: RunOpts): string[] {
  * Args do Codex CLI (`codex exec`). Dialeto próprio: subcomando `exec`, saída JSONL (`--json`),
  * effort via config override (`-c model_reasoning_effort=...`), autonomia via bypass. Função pura.
  */
-export function buildCodexArgs(opts: RunOpts): string[] {
+export function buildCodexArgs(opts: RunOpts, sandboxed = false): string[] {
   // --ignore-user-config: NÃO carrega ~/.codex/config.toml (que traz MCP servers externos — o codex
   // pendurava tentando conectá-los até timeout, subindo N processos). --ignore-rules: idem para .rules.
   // Auth continua via CODEX_HOME. Isso complementa o sandbox (defense-in-depth).
   const flags = ["--json", "--ignore-user-config", "--ignore-rules"];
-  // read-only (explore/read_slice/web_lookup) → sandbox read-only do codex + sem pedir aprovação
-  // (senão pendura em headless). Sem mode (delegate/generate_image) → bypass total (full access).
-  if (opts.mode) flags.push("-s", "read-only", "-c", 'approval_policy="never"');
+  // read-only (explore/read_slice/web_lookup). Se o cursor-bridge JÁ envolve o codex em bwrap
+  // (`sandboxed`), o read-only vem do `--ro-bind` do workspace (buildSandboxArgs): usar o sandbox
+  // INTERNO do codex (`-s read-only`) aninharia um namespace DENTRO do bwrap e quebra com
+  // "bwrap: No permissions to create new namespace". Então bypass o sandbox do codex e confia no
+  // bwrap externo. SEM bwrap externo (sandbox off), usa o `-s read-only` do codex (não há o que
+  // aninhar). Sem mode (delegate/generate_image) → bypass total.
+  if (opts.mode && !sandboxed) flags.push("-s", "read-only", "-c", 'approval_policy="never"');
   else flags.push("--dangerously-bypass-approvals-and-sandbox");
   if (opts.web) flags.push("-c", "tools.web_search=true"); // busca web (web_lookup)
   if (opts.model) flags.push("-m", opts.model);
@@ -378,10 +382,10 @@ export function buildClaudeArgs(opts: RunOpts): string[] {
   return args;
 }
 
-/** Despacha a montagem de args pelo engine. */
-export function buildArgs(engine: Engine, opts: RunOpts): string[] {
+/** Despacha a montagem de args pelo engine. `sandboxed` = o bridge vai envolver em bwrap (afeta codex). */
+export function buildArgs(engine: Engine, opts: RunOpts, sandboxed = false): string[] {
   if (engine === "grok") return buildGrokArgs(opts);
-  if (engine === "codex") return buildCodexArgs(opts);
+  if (engine === "codex") return buildCodexArgs(opts, sandboxed);
   if (engine === "claude") return buildClaudeArgs(opts);
   return buildCursorArgs(opts);
 }
@@ -512,16 +516,18 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
     : engine === "codex" ? CODEX_BIN
     : engine === "claude" ? CLAUDE_BIN
     : CURSOR_BIN;
-  const engineArgs = buildArgs(engine, opts);
   const workspace = opts.cwd ?? process.cwd();
 
   // O sandbox bwrap ($HOME isolado) é OBRIGATÓRIO para TODOS os engines — nenhum modelo roda fora
   // dele. Isola a config global de cada CLI (~/.cursor/rules, ~/.grok/config.toml, ~/.codex/config)
   // que carregava rules/MCP servers, inflando tokens.
+  const bwrap = SANDBOX_ON ? bwrapPath() : null;
+  // `!!bwrap`: com bwrap externo, o read-only do codex vem do --ro-bind do workspace — NÃO do sandbox
+  // interno do codex, que aninharia um namespace dentro do bwrap e quebraria. Ver buildCodexArgs.
+  const engineArgs = buildArgs(engine, opts, !!bwrap);
   let cmd = bin;
   let args = engineArgs;
   let cleanup = () => {};
-  const bwrap = SANDBOX_ON ? bwrapPath() : null;
   if (bwrap) {
     const built = buildSandboxSpec(workspace, engine, !!opts.mode);
     cleanup = built.cleanup;
