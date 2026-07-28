@@ -270,6 +270,8 @@ async function main() {
   } catch {
     process.exit(0); // sem input parseável → não atrapalha
   }
+  // off = no-op total: SessionStart/SubagentStart/PreToolUse não emitem nada.
+  if (HOOK_MODE === "off") process.exit(0);
   if (data?.hook_event_name === "SubagentStart") {
     try {
       process.stdout.write(
@@ -302,7 +304,6 @@ async function main() {
   const seen = loadSeen(path);
   const res = decide({ tool_name: data?.tool_name, tool_input: data?.tool_input, seen });
   if (!res) process.exit(0);
-  if (HOOK_MODE === "off") process.exit(0);
   for (const k of res.keys) seen.add(k);
   saveSeen(path, seen);
   if (HOOK_MODE === "redirect" && res.redirect) denyRedirect(res.text);

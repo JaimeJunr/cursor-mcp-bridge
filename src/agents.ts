@@ -6,9 +6,9 @@
  * grok --rules, codex -c developer_instructions). Assim a feature NÃO é exclusiva do claude e o
  * sandbox continua com o $HOME vazio (a persona viaja como argumento, sem bind novo).
  */
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 /** Persona resolvida: o body markdown vira system prompt portável cross-engine. */
 export interface ResolvedAgent {
@@ -26,12 +26,24 @@ export function agentRoots(cwd: string): string[] {
   const home = process.env.HOME ?? homedir();
   const extra = (process.env.CURSOR_BRIDGE_AGENT_PATHS ?? "")
     .split(":").map((p) => p.trim()).filter(Boolean);
+  const containedRoot = (root: string, parent: string): string | undefined => {
+    try {
+      return isInside(realpathSync(root), realpathSync(parent)) ? root : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   return [
-    ...extra,
-    join(cwd, ".claude", "agents"),
-    join(home, ".claude", "agents"),
-    join(home, ".claude", "plugins"), // agents de plugin (pit:issue-investigator → issue-investigator.md)
-  ].filter(existsSync);
+    ...extra.filter(existsSync), // configuração explícita: roots fora de cwd/home são confiáveis
+    containedRoot(join(cwd, ".claude", "agents"), cwd),
+    containedRoot(join(home, ".claude", "agents"), home),
+    containedRoot(join(home, ".claude", "plugins"), home), // pit:issue-investigator → issue-investigator.md
+  ].filter((root): root is string => root !== undefined);
+}
+
+/** Confere contenção em paths canônicos sem confundir, por exemplo, `/a/b` com `/a/bc`. */
+function isInside(child: string, parent: string): boolean {
+  return child === parent || child.startsWith(parent.endsWith(sep) ? parent : `${parent}${sep}`);
 }
 
 /**
@@ -59,7 +71,7 @@ function findAgentFiles(root: string, base: string, depth = 6, acc: string[] = [
   try { entries = readdirSync(root, { withFileTypes: true }); } catch { return acc; }
   for (const e of entries) {
     const full = join(root, e.name);
-    if (e.isFile() && e.name === `${base}.md`) acc.push(full);
+    if ((e.isFile() || e.isSymbolicLink()) && e.name === `${base}.md`) acc.push(full);
     else if (e.isDirectory() && depth > 0 && !e.name.startsWith(".")) findAgentFiles(full, base, depth - 1, acc);
   }
   return acc;
@@ -93,7 +105,29 @@ export function resolveAgent(input: AgentInput, cwd: string): ResolvedAgent {
   for (const root of agentRoots(cwd)) {
     const files = findAgentFiles(root, base);
     if (files.length) {
-      const parsed = parseAgentFile(readFileSync(newest(files), "utf8"));
+      let canonicalRoot: string;
+      try { canonicalRoot = realpathSync(root); } catch { continue; }
+      const containedFiles = files.flatMap((file) => {
+        try {
+          const canonicalFile = realpathSync(file);
+          return isInside(canonicalFile, canonicalRoot) ? [canonicalFile] : [];
+        } catch {
+          return [];
+        }
+      });
+      if (!containedFiles.length) continue;
+      let file: string;
+      let raw: string;
+      try {
+        file = newest(containedFiles);
+        raw = readFileSync(file, "utf8");
+      } catch {
+        continue;
+      }
+      const parsed = parseAgentFile(raw);
+      if (!parsed.prompt.trim()) {
+        throw new Error(`invalid agent '${input}': file '${file}' needs a non-empty prompt body`);
+      }
       return { ...parsed, name: parsed.name ?? base };
     }
   }

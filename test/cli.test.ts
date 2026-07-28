@@ -4,9 +4,27 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildCursorArgs, buildGrokArgs, buildCodexArgs, buildClaudeArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
-  budgetNote, parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
+  budgetNote, formatSessionHandle, parseSessionHandle, parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
   type SandboxSpec, type Engine,
 } from "../src/cli.js";
+
+describe("session handles", () => {
+  it("formata o engine junto com o id", () => {
+    expect(formatSessionHandle("codex", "abc")).toBe("codex:abc");
+  });
+
+  it("extrai engine e id de um handle qualificado", () => {
+    expect(parseSessionHandle("codex:abc")).toEqual({ engine: "codex", id: "abc" });
+  });
+
+  it("mantém ids legados sem prefixo", () => {
+    expect(parseSessionHandle("raw-uuid-no-prefix")).toEqual({ id: "raw-uuid-no-prefix" });
+  });
+
+  it("mantém o handle inteiro quando o prefixo não é um engine válido", () => {
+    expect(parseSessionHandle("foo:bar")).toEqual({ id: "foo:bar" });
+  });
+});
 
 describe("budgetNote", () => {
   it("reports the effective timeout in rounded minutes", () => {
@@ -82,6 +100,7 @@ describe("buildSandboxArgs", () => {
     isoHome: "/tmp/iso",
     tmpDir: "/tmp/sbx",
     workspace: "/repo",
+    workspaceRo: false,
     systemRo: ["/usr", "/bin"],
     homeRo: ["/home/u/.config/cursor/auth.json", "/home/u/.local"],
     homeRw: ["/home/u/.gradle"],
@@ -100,11 +119,47 @@ describe("buildSandboxArgs", () => {
   it("binda o workspace por último (após binds do HOME e extras, antes do --setenv)", () => {
     const args = buildSandboxArgs(spec);
     const setenv = args.indexOf("--setenv");
-    // o último --bind antes do --setenv é o workspace, nunca sobreposto
+    // o último bind antes do --setenv é o workspace, nunca sobreposto
     let lastBind = -1;
-    for (let i = 0; i < setenv; i++) if (args[i] === "--bind") lastBind = i;
+    for (let i = 0; i < setenv; i++) {
+      if (args[i] === "--bind" || args[i] === "--ro-bind") lastBind = i;
+    }
     expect(args[lastBind + 1]).toBe("/repo");
     expect(args[lastBind + 2]).toBe("/repo");
+  });
+
+  it("monta o workspace read-only como o último bind quando workspaceRo é true", () => {
+    const args = buildSandboxArgs({ ...spec, workspaceRo: true });
+    const setenv = args.indexOf("--setenv");
+    let lastBind = -1;
+    for (let i = 0; i < setenv; i++) {
+      if (args[i] === "--bind" || args[i] === "--ro-bind") lastBind = i;
+    }
+    expect(args[lastBind]).toBe("--ro-bind");
+    expect(args.slice(lastBind, lastBind + 3)).toEqual(["--ro-bind", "/repo", "/repo"]);
+  });
+
+  it("mantém o workspace read-write quando workspaceRo é false", () => {
+    const args = buildSandboxArgs(spec);
+    const setenv = args.indexOf("--setenv");
+    let lastBind = -1;
+    for (let i = 0; i < setenv; i++) {
+      if (args[i] === "--bind" || args[i] === "--ro-bind") lastBind = i;
+    }
+    expect(args[lastBind]).toBe("--bind");
+    expect(args.slice(lastBind, lastBind + 3)).toEqual(["--bind", "/repo", "/repo"]);
+  });
+
+  it("propaga workspaceRo no spec e usa false por padrão", () => {
+    const readOnly = buildSandboxSpec("/repo", "codex", true);
+    const readWrite = buildSandboxSpec("/repo", "codex");
+    try {
+      expect(readOnly.spec.workspaceRo).toBe(true);
+      expect(readWrite.spec.workspaceRo).toBe(false);
+    } finally {
+      readOnly.cleanup();
+      readWrite.cleanup();
+    }
   });
 
   it("monta os binds extras RW depois dos binds do HOME e antes do workspace", () => {

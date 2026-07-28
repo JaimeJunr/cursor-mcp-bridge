@@ -1,6 +1,22 @@
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — hook is plain .mjs sem types; só a lógica pura importa aqui.
 import { decide, sessionStartContext, subagentStartContext } from "../hooks/prefer-cursor-bridge.mjs";
+
+const hookPath = fileURLToPath(new URL("../hooks/prefer-cursor-bridge.mjs", import.meta.url));
+
+/** Roda o hook como processo filho com o env dado; retorna stdout. */
+function runHook(evt: object, env: NodeJS.ProcessEnv = process.env): string {
+  const r = spawnSync(process.execPath, [hookPath], {
+    input: JSON.stringify(evt),
+    env,
+    encoding: "utf8",
+  });
+  expect(r.error).toBeUndefined();
+  expect(r.status).toBe(0);
+  return r.stdout ?? "";
+}
 
 /** fs falso: N linhas num arquivo "grande o suficiente" em bytes mas abaixo do teto. */
 const fakeFs = (lines: number) => ({
@@ -186,5 +202,34 @@ describe("subagentStartContext — contexto injetado no subagente", () => {
   it("tipos diferentes de Explore não recebem o reforço específico", () => {
     expect(subagentStartContext("general-purpose")).not.toMatch(/Explore run/i);
     expect(subagentStartContext("explore")).not.toMatch(/Explore run/i);
+  });
+});
+
+describe("HOOK_MODE=off — no-op total (subprocess)", () => {
+  const offEnv = { ...process.env, CURSOR_BRIDGE_HOOK_MODE: "off" };
+
+  it("SessionStart com off → stdout vazio (não injeta routing prompt)", () => {
+    const out = runHook({ hook_event_name: "SessionStart", session_id: "test-off-ss" }, offEnv);
+    expect(out).toBe("");
+  });
+
+  it("SubagentStart com off → stdout vazio (não injeta agent context)", () => {
+    const out = runHook(
+      { hook_event_name: "SubagentStart", agent_type: "Explore" },
+      offEnv,
+    );
+    expect(out).toBe("");
+  });
+
+  it("SessionStart sem off (default/redirect) → stdout não-vazio", () => {
+    // Isola dedup por session_id único; não depende de ~/.claude.
+    const env = { ...process.env };
+    delete env.CURSOR_BRIDGE_HOOK_MODE;
+    const out = runHook(
+      { hook_event_name: "SessionStart", session_id: `test-on-ss-${Date.now()}` },
+      env,
+    );
+    expect(out.length).toBeGreaterThan(0);
+    expect(out).toMatch(/cursor-bridge|SessionStart|additionalContext/);
   });
 });

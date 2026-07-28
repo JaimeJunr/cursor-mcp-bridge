@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   runCursor, EXPLORE_MODEL, IMAGE_MODEL, DEFAULT_TIMEOUT_MS, budgetNote,
-  hasEngine, resolveTier, type CliResult,
+  formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, type CliResult,
 } from "./cli.js";
 import { resolveAgent } from "./agents.js";
 import {
@@ -44,8 +44,11 @@ const agentDescription =
 
 /** Formata o resultado do Cursor e loga os chars devolvidos ao contexto (custo real). */
 function format(tool: string, res: CliResult): { content: { type: "text"; text: string }[] } {
+  const sessionHandle = res.engine && res.sessionId
+    ? formatSessionHandle(res.engine, res.sessionId)
+    : res.sessionId;
   const footer = res.sessionId
-    ? `\n\n---\nsession_id: ${res.sessionId} (pass to follow_up to continue this session)`
+    ? `\n\n---\nsession_id: ${sessionHandle} (pass to follow_up to continue this session)`
     : "";
   const text = res.text + footer;
   logUsage(tool, text.length);
@@ -327,8 +330,13 @@ server.registerTool(
   },
   // force: mesma razão do delegate — ao continuar uma sessão que roda shell (delegate/run_filtered),
   // o sandbox rejeita todo comando sem --force. mode:'ask' (quando passado) mantém o filesystem read-only.
-  async ({ session_id, question, mode, cwd, model, effort }) =>
-    format("follow_up", await runCursor({ prompt: question, resume: session_id, mode, cwd, model, effort, force: true })),
+  async ({ session_id, question, mode, cwd, model, effort }) => {
+    const { engine, id } = parseSessionHandle(session_id);
+    return format(
+      "follow_up",
+      await runCursor({ prompt: question, engine, resume: id, mode, cwd, model, effort, force: true }),
+    );
+  },
 );
 
 server.registerTool(

@@ -6,6 +6,23 @@ import { join } from "node:path";
 /** CLIs suportados. Cada engine tem dialeto de args e parser de saída próprios. */
 export type Engine = "cursor" | "grok" | "codex" | "claude";
 
+/** Formata um id de sessão com o engine que deve retomá-lo. */
+export function formatSessionHandle(engine: Engine, id: string): string {
+  return `${engine}:${id}`;
+}
+
+/** Extrai engine e id de um handle; ids antigos sem prefixo continuam válidos. */
+export function parseSessionHandle(handle: string): { engine?: Engine; id: string } {
+  const separator = handle.indexOf(":");
+  if (separator === -1) return { id: handle };
+
+  const prefix = handle.slice(0, separator);
+  if (prefix !== "cursor" && prefix !== "grok" && prefix !== "codex" && prefix !== "claude") {
+    return { id: handle };
+  }
+  return { engine: prefix, id: handle.slice(separator + 1) };
+}
+
 /**
  * Binário do Cursor CLI. Default `cursor-agent` (NÃO `agent`: no PATH do user `agent` pode ser o
  * grok — o bridge quebra ou some por acidente do sandbox). Override via CURSOR_BIN.
@@ -141,8 +158,10 @@ export interface SandboxSpec {
   isoHome: string;
   /** dir montado como /tmp dentro do sandbox (RW, efêmero). */
   tmpDir: string;
-  /** cwd do run, montado RW — sempre o último bind pra nunca ser sobreposto. */
+  /** cwd do run — sempre o último bind pra nunca ser sobreposto. */
   workspace: string;
+  /** monta o workspace como somente leitura quando true. */
+  workspaceRo: boolean;
   systemRo: string[];
   homeRo: string[];
   homeRw: string[];
@@ -164,7 +183,7 @@ export function buildSandboxArgs(spec: SandboxSpec): string[] {
   for (const p of spec.homeRo) args.push("--ro-bind", p, p);
   for (const p of spec.homeRw) args.push("--bind", p, p);
   for (const p of spec.extraBinds) args.push("--bind", p, p);
-  args.push("--bind", spec.workspace, spec.workspace);
+  args.push(spec.workspaceRo ? "--ro-bind" : "--bind", spec.workspace, spec.workspace);
   args.push(
     "--setenv", "HOME", spec.home,
     "--setenv", "USER", spec.user,
@@ -193,7 +212,11 @@ function bwrapPath(): string | null {
 }
 
 /** Cria os dirs efêmeros e sonda os paths existentes pra montar o SandboxSpec. */
-export function buildSandboxSpec(workspace: string, engine: Engine): { spec: SandboxSpec; cleanup: () => void } {
+export function buildSandboxSpec(
+  workspace: string,
+  engine: Engine,
+  workspaceRo = false,
+): { spec: SandboxSpec; cleanup: () => void } {
   const home = process.env.HOME ?? homedir();
   const isoHome = mkdtempSync(join(tmpdir(), "cbx-home-"));
   const tmpDir = mkdtempSync(join(tmpdir(), "cbx-tmp-"));
@@ -207,6 +230,7 @@ export function buildSandboxSpec(workspace: string, engine: Engine): { spec: San
     isoHome,
     tmpDir,
     workspace,
+    workspaceRo,
     systemRo: SANDBOX_SYSTEM_RO.filter((p) => existsSync(p)),
     // base (toolchains + cursor auth) + os subpaths RO específicos do engine (auth/libs do CLI)
     homeRo: [...SANDBOX_HOME_RO, ...SANDBOX_ENGINE_RO[engine]].map(abs).filter((p) => existsSync(p)),
@@ -365,6 +389,7 @@ export function buildArgs(engine: Engine, opts: RunOpts): string[] {
 export interface CliResult {
   text: string;
   sessionId?: string;
+  engine?: Engine;
 }
 
 /**
@@ -498,7 +523,7 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
   let cleanup = () => {};
   const bwrap = SANDBOX_ON ? bwrapPath() : null;
   if (bwrap) {
-    const built = buildSandboxSpec(workspace, engine);
+    const built = buildSandboxSpec(workspace, engine, !!opts.mode);
     cleanup = built.cleanup;
     cmd = bwrap;
     args = [...buildSandboxArgs(built.spec), bin, ...engineArgs];
@@ -540,7 +565,7 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
         reject(new Error(`${engine} agent exited ${code}: ${stderr.trim() || stdout.trim()}`));
         return;
       }
-      resolve(parseOutput(engine, stdout));
+      resolve({ ...parseOutput(engine, stdout), engine });
     });
   });
 }
