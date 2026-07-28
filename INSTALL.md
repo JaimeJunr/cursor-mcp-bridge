@@ -115,7 +115,52 @@ Almost every other host takes the same stdio JSON. Find its MCP config file (usu
 To pass configuration (see [`README.md`](README.md) env table), add an `"env"` object, e.g.
 `"env": { "CURSOR_BRIDGE_FORCE": "1" }`.
 
-## 3. Verify the registration
+## 3. Allowlist the bridge tools (Claude Code)
+
+**Registration does not grant permission.** `claude mcp add` only registers the server;
+without an allowlist, Claude Code prompts on **every** bridge tool call — that kills
+adoption (the host is supposed to use these tools freely instead of native ones). Edit
+`permissions.allow` in `settings.json` (user scope `~/.claude/settings.json`, or project
+scope `.claude/settings.json`). Pick one option:
+
+**Option A — full allowlist (convenience).** Auto-approves every bridge tool:
+
+```json
+{
+  "permissions": {
+    "allow": ["mcp__cursor-bridge__*"]
+  }
+}
+```
+
+This also auto-approves the **mutating** tools — `delegate`, `build`, `run_filtered`, and
+`follow_up` — which edit files and run shell in the worker's sandbox. Fine if you trust the
+bridge; the worker is sandboxed to `cwd`.
+
+**Option B — read-only allowlist (safer).** Auto-approve only tools that never mutate;
+mutating ones still prompt so you can review each change:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__cursor-bridge__explore",
+      "mcp__cursor-bridge__read_slice",
+      "mcp__cursor-bridge__web_lookup",
+      "mcp__cursor-bridge__plan",
+      "mcp__cursor-bridge__bridge_stats"
+    ]
+  }
+}
+```
+
+With Option B, `delegate` / `build` / `run_filtered` / `follow_up` / `generate_image` still
+prompt before running, while reading / locating / web / planning stay frictionless.
+
+Merge into any existing `permissions.allow` array (do not wipe other entries). Cursor, Codex,
+and other hosts have their own approval settings — consult the host.
+
+## 4. Verify the registration
 
 ```bash
 claude mcp list                 # Claude Code — expect: cursor-bridge … ✔ Connected
@@ -127,16 +172,16 @@ For Cursor and GUI hosts: reload/restart the host and confirm `cursor-bridge` sh
 (`delegate`, `explore`, `read_slice`, `run_filtered`, `web_lookup`, `follow_up`, `bridge_stats`).
 Report the connection status back to the user.
 
-## 4. (Recommended, Claude Code) Make the agent actually use it
+## 5. (Recommended, Claude Code) Make the agent actually use it
 
 Registration alone is not enough — the bridge tools are **deferred** and lose to native
 `Read`/`Grep`/`WebSearch` by default. Wire the shipped hook (`hooks/prefer-cursor-bridge.mjs`)
-into `settings.json` for `PreToolUse`, `SessionStart`, and `Agent|Task`. The exact JSON blocks
+into `settings.json` for `PreToolUse`, `SessionStart`, and `SubagentStart`. The exact JSON blocks
 and the reasoning are in [`README.md` → "Make the agent actually use it"](README.md#make-the-agent-actually-use-it).
 Do this step only for Claude Code; other hosts do not run these hooks.
 
 ## Done — report to the user
 
-State: which host(s) you registered, the verification result (Connected / tools visible), and
-whether the Cursor CLI was authenticated. If any prerequisite failed, report that instead of
-claiming success.
+State: which host(s) you registered, which allowlist option you applied (A / B / skipped),
+the verification result (Connected / tools visible), and whether the Cursor CLI was
+authenticated. If any prerequisite failed, report that instead of claiming success.

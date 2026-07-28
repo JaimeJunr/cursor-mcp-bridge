@@ -4,9 +4,9 @@
  * token-expensive native tools, at the moment of the call (text alone in
  * CLAUDE.md loses to structural friction; a call-time reminder wins).
  *
- * Wire it for "Read|Grep|Glob|WebSearch|WebFetch|Bash|Edit|Write" (main-loop
- * nudges) AND for "Agent|Task" (inject the preference into spawned subagent
- * prompts). See README.
+ * Configure "Read|Grep|Glob|WebSearch|WebFetch|Bash|Edit|Write" no PreToolUse
+ * para os lembretes do loop principal e uma entrada SubagentStart separada
+ * para injetar a preferência nos subagentes. Veja o README.
  *
  * Design constraints:
  *  - Cheap: only emits a nudge when it actually pays off (large whole-file
@@ -19,19 +19,22 @@
  *  - Preload once: the first qualifying nudge of a session also carries the
  *    one-time reminder to run ToolSearch, because these MCP tools are deferred
  *    and lose to the always-loaded native Read/Grep until their schemas load.
- *  - Non-blocking: always allows the tool; only injects `additionalContext`.
+ *  - Fail-open: web e Read grande podem ser bloqueados só uma vez; os demais
+ *    casos apenas injetam `additionalContext`.
  *  - Never breaks the tool: any error → print nothing, exit 0.
  *
  * Env:
  *  - CURSOR_BRIDGE_HOOK_MIN_LINES: line threshold for the Read nudge (default 300).
+ *  - CURSOR_BRIDGE_HOOK_MODE: off | nudge | redirect (padrão redirect).
  */
 import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const PARSED_MIN_LINES = Number(process.env.CURSOR_BRIDGE_HOOK_MIN_LINES);
 const MIN_LINES = Number.isFinite(PARSED_MIN_LINES) && PARSED_MIN_LINES > 0 ? PARSED_MIN_LINES : 300;
+const HOOK_MODE = (process.env.CURSOR_BRIDGE_HOOK_MODE ?? "redirect").toLowerCase(); // off | nudge | redirect
 const BIG_BYTES = 2 * 1024 * 1024; // acima disto não conta linhas — já é "grande"
 const SKIP_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|wasm|mp4|mov|woff2?)$/i;
 
@@ -101,40 +104,10 @@ export function sessionStartContext() {
   );
 }
 
-// ---- Agent/Task injection: teach spawned subagents about cursor-bridge too ----
-//
-// Subagents never see the main-loop nudges above; the only way to reach a
-// subagent's prompt from a PreToolUse hook is `updatedInput` on the Agent/Task
-// call. The context-mode plugin already does exactly that — it appends a strong
-// "route everything through context-mode" block to the subagent prompt, and it
-// never mentions cursor-bridge. So subagents are born blind to the bridge.
-//
-// We append a cursor-bridge preference to the same prompt. But multiple hooks
-// returning `updatedInput` for one tool DON'T merge — it's last-to-finish-wins,
-// non-deterministic (Claude Code hooks are parallel). To never clobber
-// context-mode's block, we reproduce it: import context-mode's live routing,
-// take the prompt it would produce (already carrying its block), and append
-// ours. Then whoever wins the race, context-mode's block survives; cursor-bridge
-// survives only when WE win — which the delay below biases toward.
-//
-// If context-mode's routing can't be imported, we stay OUT entirely (return
-// null): injecting a cursor-bridge-only prompt could win the race and drop
-// context-mode's block. Preserving context-mode is the hard invariant.
+// ---- Contexto do SubagentStart: ensina os subagentes sobre cursor-bridge ----
 
-/** Prompt field names a subagent call may carry, in the same order context-mode probes. */
-const AGENT_FIELDS = ["prompt", "request", "objective", "question", "query", "task"];
-
-/** Marker for idempotency — never inject twice into the same prompt. */
+/** Marcador mantido para compatibilidade com consumidores externos. */
 export const CURSOR_BRIDGE_MARKER = "<cursor_bridge_preference>";
-
-/** Live context-mode routing module (exports routePreToolUse). Override for tests/relocation. */
-const CM_ROUTING =
-  process.env.CONTEXT_MODE_ROUTING ||
-  join(homedir(), ".claude", "plugins", "marketplaces", "context-mode", "hooks", "core", "routing.mjs");
-
-/** ms to wait before emitting, to finish after context-mode's heavier hook and win the last-wins race. 0 disables. */
-const PARSED_DELAY = Number(process.env.CURSOR_BRIDGE_AGENT_DELAY_MS);
-const AGENT_DELAY_MS = Number.isFinite(PARSED_DELAY) && PARSED_DELAY >= 0 ? PARSED_DELAY : 350;
 
 const AGENT_PREF_BODY =
   "cursor-bridge MCP is available to you (a subagent) — the cheap/fast Cursor worker. For PURE " +
@@ -155,43 +128,19 @@ const EXPLORE_EXTRA =
   "locating via explore(question)/read_slice(files,want), which run on Cursor's composer model (cheap) " +
   "and keep dumps out of your context. Use native Read only for a file you are about to edit.";
 
-/** Monta o bloco de preferência, com o reforço extra quando o subagente é o Explore nativo. */
-function agentPref(subagentType) {
-  const extra = subagentType === "Explore" ? EXPLORE_EXTRA : "";
-  return `\n\n${CURSOR_BRIDGE_MARKER}\n${AGENT_PREF_BODY}${extra}\n</cursor_bridge_preference>`;
-}
-
 /**
- * Pure builder for the Agent/Task `updatedInput`. `routeFn(toolInput)` must return
- * context-mode's normalized decision ({ action:"modify", updatedInput }) so its block
- * is preserved. Returns the combined updatedInput, or null to inject nothing (already
- * injected, or context-mode routing unavailable/unexpected).
- * @example buildAgentUpdatedInput({ prompt: "do x" }, () => ({ action: "modify", updatedInput: { prompt: "do x<CM>" } }))
+ * Monta o contexto injetado antes do primeiro turno do subagente, com reforço
+ * adicional quando o tipo informado pelo SubagentStart é o Explore nativo.
+ * @example subagentStartContext("Explore") // → preferência + reforço do Explore
  */
-export function buildAgentUpdatedInput(toolInput, routeFn) {
-  const field = AGENT_FIELDS.find((f) => f in toolInput) ?? "prompt";
-  const cur = typeof toolInput[field] === "string" ? toolInput[field] : "";
-  if (cur.includes(CURSOR_BRIDGE_MARKER)) return null; // idempotente
-  let base;
-  try {
-    const d = routeFn(toolInput);
-    if (!d || d.action !== "modify" || !d.updatedInput) return null;
-    base = d.updatedInput;
-  } catch {
-    return null;
-  }
-  // Anexa no MESMO campo detectado em toolInput: context-mode reusa a mesma ordem de
-  // AGENT_FIELDS e faz spread do input, então base[field] existe (>= o bloco dele) e o
-  // marcador de idempotência (checado em toolInput[field]) e a escrita coincidem. O spread
-  // de `base` preserva qualquer outro campo que o context-mode alterou (ex.: subagent_type
-  // Bash → general-purpose). O `?? cur` cobre um routeFn degenerado que não setou o campo.
-  return { ...base, [field]: String(base[field] ?? cur) + agentPref(toolInput.subagent_type) };
+export function subagentStartContext(subagentType) {
+  return AGENT_PREF_BODY + (subagentType === "Explore" ? EXPLORE_EXTRA : "");
 }
 
 /**
- * Pure decision: given the tool call and the set of nudges already fired this
- * session, return the nudge to emit ({ keys, text }) or null. fs deps are
- * injectable for testing.
+ * Decisão pura: dada a chamada de tool e o conjunto de nudges já disparados nesta
+ * sessão, retorna o nudge a emitir ({ keys, text, redirect }) ou null. As dependências
+ * de fs são injetáveis para testes.
  * @example decide({ tool_name: "WebSearch", tool_input: {}, seen: new Set() })
  */
 export function decide(input, deps = {}) {
@@ -203,9 +152,13 @@ export function decide(input, deps = {}) {
   if (!base) return null;
   // O primeiro nudge da sessão carrega junto o lembrete único de preload.
   if (base.key !== "preload" && !seen.has("preload")) {
-    return { keys: [base.key, "preload"], text: `${base.text}\n\n${PRELOAD_TEXT}` };
+    return {
+      keys: [base.key, "preload"],
+      text: `${base.text}\n\n${PRELOAD_TEXT}`,
+      redirect: base.redirect === true,
+    };
   }
-  return { keys: [base.key], text: base.text };
+  return { keys: [base.key], text: base.text, redirect: base.redirect === true };
 }
 
 /** Decisão base por tipo de tool, já respeitando o dedup (`seen`). */
@@ -214,7 +167,7 @@ function baseDecision(input, { stat, read, minLines }, seen) {
   const ti = input?.tool_input ?? {};
 
   if (tool === "WebSearch" || tool === "WebFetch") {
-    return seen.has("web") ? null : { key: "web", text: WEB_TEXT };
+    return seen.has("web") ? null : { key: "web", text: WEB_TEXT, redirect: true };
   }
 
   // Bash de MUTAÇÃO (commit/PR/ticket/branch) → offload pro delegate, 1× por sessão.
@@ -253,6 +206,7 @@ function baseDecision(input, { stat, read, minLines }, seen) {
     const shown = lines === Infinity ? "very large" : `${lines}-line`;
     return {
       key,
+      redirect: true,
       text:
         `cursor-bridge available: ${file} is a ${shown} file. If you will NOT Edit it, use ` +
         `read_slice(files, want) to load only the needed lines instead of Read (which puts the whole ` +
@@ -294,36 +248,16 @@ function nudge(text) {
   );
 }
 
-/**
- * Agent/Task path: append the cursor-bridge preference to the subagent prompt,
- * preserving context-mode's block. No session dedup — every spawned subagent
- * needs its own injection; idempotency is by the marker in the prompt.
- */
-async function handleAgent(data) {
-  const toolInput = data?.tool_input ?? {};
-  const projectDir = process.env.CLAUDE_PROJECT_DIR;
-  let routeFn;
-  try {
-    const mod = await import(pathToFileURL(CM_ROUTING).href);
-    if (typeof mod.routePreToolUse !== "function") return; // context-mode ausente → não arrisca clobber
-    routeFn = (ti) => mod.routePreToolUse("Agent", ti, projectDir, "claude-code");
-  } catch {
-    return;
-  }
-  const updatedInput = buildAgentUpdatedInput(toolInput, routeFn);
-  if (!updatedInput) return;
-  // Best-effort: atrasa a emissão para terminar depois do hook (mais pesado) do
-  // context-mode e vencer o last-wins não-determinístico. NÃO é garantia — se o
-  // context-mode demorar mais que AGENT_DELAY_MS, ele vence e a preferência não entra
-  // (o bloco dele sempre sobrevive). Ajuste via CURSOR_BRIDGE_AGENT_DELAY_MS.
-  if (AGENT_DELAY_MS > 0) await new Promise((r) => setTimeout(r, AGENT_DELAY_MS));
+const FAILOPEN_SUFFIX =
+  " — If that cursor-bridge tool isn't loaded yet, run the ToolSearch preload first; if you genuinely need this native tool's raw result, just call it again and it will be allowed (this redirect fires only once).";
+
+function denyRedirect(reason) {
   process.stdout.write(
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
-        permissionDecision: "allow",
-        permissionDecisionReason: "cursor-bridge preference added to subagent prompt",
-        updatedInput,
+        permissionDecision: "deny",
+        permissionDecisionReason: reason + FAILOPEN_SUFFIX,
       },
     }),
   );
@@ -336,8 +270,21 @@ async function main() {
   } catch {
     process.exit(0); // sem input parseável → não atrapalha
   }
-  if (data?.tool_name === "Agent" || data?.tool_name === "Task") {
-    await handleAgent(data);
+  // off = no-op total: SessionStart/SubagentStart/PreToolUse não emitem nada.
+  if (HOOK_MODE === "off") process.exit(0);
+  if (data?.hook_event_name === "SubagentStart") {
+    try {
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "SubagentStart",
+            additionalContext: subagentStartContext(data?.agent_type),
+          },
+        }),
+      );
+    } catch {
+      // Fail-open: uma falha no contexto nunca impede o início do subagente.
+    }
     process.exit(0);
   }
   const sessionId = typeof data?.session_id === "string" && data.session_id ? data.session_id : "default";
@@ -359,7 +306,8 @@ async function main() {
   if (!res) process.exit(0);
   for (const k of res.keys) seen.add(k);
   saveSeen(path, seen);
-  nudge(res.text);
+  if (HOOK_MODE === "redirect" && res.redirect) denyRedirect(res.text);
+  else nudge(res.text);
   process.exit(0);
 }
 

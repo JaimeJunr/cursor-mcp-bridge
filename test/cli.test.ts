@@ -3,14 +3,39 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  buildCursorArgs, buildGrokArgs, buildCodexArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
-  parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
+  buildCursorArgs, buildGrokArgs, buildCodexArgs, buildClaudeArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
+  budgetNote, formatSessionHandle, parseSessionHandle, parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
   type SandboxSpec, type Engine,
 } from "../src/cli.js";
 
+describe("session handles", () => {
+  it("formata o engine junto com o id", () => {
+    expect(formatSessionHandle("codex", "abc")).toBe("codex:abc");
+  });
+
+  it("extrai engine e id de um handle qualificado", () => {
+    expect(parseSessionHandle("codex:abc")).toEqual({ engine: "codex", id: "abc" });
+  });
+
+  it("mantém ids legados sem prefixo", () => {
+    expect(parseSessionHandle("raw-uuid-no-prefix")).toEqual({ id: "raw-uuid-no-prefix" });
+  });
+
+  it("mantém o handle inteiro quando o prefixo não é um engine válido", () => {
+    expect(parseSessionHandle("foo:bar")).toEqual({ id: "foo:bar" });
+  });
+});
+
+describe("budgetNote", () => {
+  it("reports the effective timeout in rounded minutes", () => {
+    expect(budgetNote(600_000)).toContain("~10 min");
+    expect(budgetNote(1_800_000)).toContain("~30 min");
+  });
+});
+
 describe("resolveModel", () => {
-  it("defaults to Composer 2.5 Fast (nunca auto)", () => {
-    expect(resolveModel()).toBe("composer-2.5[fast=true]");
+  it("defaults to Composer 2.5 Fast (nunca auto; id plano, sem bracket)", () => {
+    expect(resolveModel()).toBe("composer-2.5-fast");
   });
 
   it("ignores effort for auto (auto takes no bracket override)", () => {
@@ -30,7 +55,7 @@ describe("buildCursorArgs", () => {
   it("runs headless json with trust and a resolved model", () => {
     const args = buildCursorArgs({ prompt: "hi" });
     expect(args.slice(0, 4)).toEqual(["-p", "--output-format", "json", "--trust"]);
-    expect(args[args.indexOf("--model") + 1]).toBe("composer-2.5[fast=true]");
+    expect(args[args.indexOf("--model") + 1]).toBe("composer-2.5-fast");
     expect(args.at(-1)).toBe("hi");
   });
 
@@ -75,6 +100,7 @@ describe("buildSandboxArgs", () => {
     isoHome: "/tmp/iso",
     tmpDir: "/tmp/sbx",
     workspace: "/repo",
+    workspaceRo: false,
     systemRo: ["/usr", "/bin"],
     homeRo: ["/home/u/.config/cursor/auth.json", "/home/u/.local"],
     homeRw: ["/home/u/.gradle"],
@@ -93,11 +119,47 @@ describe("buildSandboxArgs", () => {
   it("binda o workspace por último (após binds do HOME e extras, antes do --setenv)", () => {
     const args = buildSandboxArgs(spec);
     const setenv = args.indexOf("--setenv");
-    // o último --bind antes do --setenv é o workspace, nunca sobreposto
+    // o último bind antes do --setenv é o workspace, nunca sobreposto
     let lastBind = -1;
-    for (let i = 0; i < setenv; i++) if (args[i] === "--bind") lastBind = i;
+    for (let i = 0; i < setenv; i++) {
+      if (args[i] === "--bind" || args[i] === "--ro-bind") lastBind = i;
+    }
     expect(args[lastBind + 1]).toBe("/repo");
     expect(args[lastBind + 2]).toBe("/repo");
+  });
+
+  it("monta o workspace read-only como o último bind quando workspaceRo é true", () => {
+    const args = buildSandboxArgs({ ...spec, workspaceRo: true });
+    const setenv = args.indexOf("--setenv");
+    let lastBind = -1;
+    for (let i = 0; i < setenv; i++) {
+      if (args[i] === "--bind" || args[i] === "--ro-bind") lastBind = i;
+    }
+    expect(args[lastBind]).toBe("--ro-bind");
+    expect(args.slice(lastBind, lastBind + 3)).toEqual(["--ro-bind", "/repo", "/repo"]);
+  });
+
+  it("mantém o workspace read-write quando workspaceRo é false", () => {
+    const args = buildSandboxArgs(spec);
+    const setenv = args.indexOf("--setenv");
+    let lastBind = -1;
+    for (let i = 0; i < setenv; i++) {
+      if (args[i] === "--bind" || args[i] === "--ro-bind") lastBind = i;
+    }
+    expect(args[lastBind]).toBe("--bind");
+    expect(args.slice(lastBind, lastBind + 3)).toEqual(["--bind", "/repo", "/repo"]);
+  });
+
+  it("propaga workspaceRo no spec e usa false por padrão", () => {
+    const readOnly = buildSandboxSpec("/repo", "codex", true);
+    const readWrite = buildSandboxSpec("/repo", "codex");
+    try {
+      expect(readOnly.spec.workspaceRo).toBe(true);
+      expect(readWrite.spec.workspaceRo).toBe(false);
+    } finally {
+      readOnly.cleanup();
+      readWrite.cleanup();
+    }
   });
 
   it("monta os binds extras RW depois dos binds do HOME e antes do workspace", () => {
@@ -157,7 +219,7 @@ describe("buildGrokArgs", () => {
     expect(args[args.indexOf("--single") + 1]).toBe("do it");
     expect(args).toContain("--output-format");
     expect(args[args.indexOf("-m") + 1]).toBe("grok-4.5");
-    expect(args[args.indexOf("--reasoning-effort") + 1]).toBe("high");
+    expect(args[args.indexOf("--effort") + 1]).toBe("high"); // xAI CLI renomeou --reasoning-effort → --effort
     expect(args).toContain("--always-approve"); // autonomia é --always-approve, não --force
     expect(args).not.toContain("--trust");
   });
@@ -184,6 +246,24 @@ describe("buildCodexArgs", () => {
     // effort é config override, não flag
     expect(args[args.indexOf("-c") + 1]).toBe('model_reasoning_effort="medium"');
     expect(args.at(-1)).toBe("fix it"); // prompt é posicional no fim
+  });
+
+  it("read-only (mode) usa -s read-only + approval_policy never, sem bypass total", () => {
+    const args = buildCodexArgs({ prompt: "read", model: "gpt-5.6-luna", mode: "ask" });
+    expect(args[args.indexOf("-s") + 1]).toBe("read-only");
+    expect(args).toContain('approval_policy="never"');
+    expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
+  it("sem mode usa o bypass total (delegate/generate_image podem escrever)", () => {
+    const args = buildCodexArgs({ prompt: "do", model: "gpt-5.6-sol" });
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args).not.toContain("read-only");
+  });
+
+  it("web:true liga a busca web do codex (web_lookup)", () => {
+    const args = buildCodexArgs({ prompt: "search", mode: "ask", web: true });
+    expect(args).toContain("tools.web_search=true");
   });
 
   it("usa o subcomando resume com o id quando há resume", () => {
@@ -239,30 +319,107 @@ describe("buildCodexArgs", () => {
 
 describe("resolveTier", () => {
   const all: (e: Engine) => boolean = () => true;
-  const none: (e: Engine) => boolean = (e) => e === "cursor";
+  const noCodex: (e: Engine) => boolean = (e) => e !== "codex";
 
-  it("nível 1 é sempre Composer 2.5 Fast no cursor-agent", () => {
-    expect(resolveTier(1, all)).toEqual({ engine: "cursor", model: "composer-2.5[fast=true]" });
-  });
-
-  it("níveis 2/3 usam Grok 4.5 com effort crescente quando o grok existe", () => {
+  it("mapeia cada nível para a engine+modelo preferido (matriz mista 3 assinaturas)", () => {
+    expect(resolveTier(1, all)).toEqual({ engine: "codex", model: "gpt-5.6-luna" });
     expect(resolveTier(2, all)).toEqual({ engine: "grok", model: "grok-4.5", effort: "medium" });
-    expect(resolveTier(3, all)).toEqual({ engine: "grok", model: "grok-4.5", effort: "high" });
-  });
-
-  it("níveis 4/5 usam GPT-5.6 Sol no codex com effort crescente", () => {
+    expect(resolveTier(3, all)).toEqual({ engine: "codex", model: "gpt-5.6-terra", effort: "medium" });
     expect(resolveTier(4, all)).toEqual({ engine: "codex", model: "gpt-5.6-sol", effort: "medium" });
-    expect(resolveTier(5, all)).toEqual({ engine: "codex", model: "gpt-5.6-sol", effort: "high" });
+    expect(resolveTier(5, all)).toEqual({ engine: "claude", model: "opus" });
   });
 
-  it("cai para o cursor-agent quando grok/codex não estão instalados", () => {
-    expect(resolveTier(3, none)).toEqual({ engine: "cursor", model: "cursor-grok-4.5-high-fast" });
-    expect(resolveTier(5, none)).toEqual({ engine: "cursor", model: "gpt-5.6-sol-xhigh-fast" });
+  it("usa um modelo DISTINTO em cada nível (sem repetição)", () => {
+    const models = [1, 2, 3, 4, 5].map((l) => resolveTier(l, all).model);
+    expect(new Set(models).size).toBe(5);
+  });
+
+  it("cai para o cursor-agent equivalente só quando CURSOR habilitado e a engine preferida falta", () => {
+    expect(resolveTier(1, noCodex, true)).toEqual({ engine: "cursor", model: "composer-2.5-fast" });
+    expect(resolveTier(3, noCodex, true)).toEqual({ engine: "cursor", model: "gpt-5.6-terra-medium-fast" });
+  });
+
+  it("lança erro claro quando a engine preferida falta e o cursor está desabilitado (default)", () => {
+    expect(() => resolveTier(1, noCodex, false)).toThrow(/needs the 'codex' CLI/);
+    expect(() => resolveTier(5, (e) => e !== "claude", false)).toThrow(/needs the 'claude' CLI/);
   });
 
   it("rejeita nível fora de 1-5", () => {
     expect(() => resolveTier(0, all)).toThrow(/expected integer 1-5/);
     expect(() => resolveTier(6, all)).toThrow(/expected integer 1-5/);
+  });
+});
+
+describe("buildClaudeArgs", () => {
+  it("roda headless print json isolando MCP/settings do user, prompt posicional no fim", () => {
+    const args = buildClaudeArgs({ prompt: "do it", model: "opus" });
+    expect(args.slice(0, 3)).toEqual(["-p", "--output-format", "json"]);
+    expect(args).toContain("--strict-mcp-config"); // zero MCP servers (não sobe os do user)
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
+    expect(args).not.toContain("--bare"); // --bare quebra a auth ("Not logged in")
+    expect(args[args.indexOf("--model") + 1]).toBe("opus");
+    expect(args.at(-1)).toBe("do it");
+  });
+
+  it("auto-aprova com --dangerously-skip-permissions quando force (delegate)", () => {
+    expect(buildClaudeArgs({ prompt: "x", force: true })).toContain("--dangerously-skip-permissions");
+  });
+
+  it("não auto-aprova por padrão", () => {
+    expect(buildClaudeArgs({ prompt: "x" })).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("adiciona --resume no follow-up", () => {
+    const args = buildClaudeArgs({ prompt: "more", resume: "c-1" });
+    expect(args[args.indexOf("--resume") + 1]).toBe("c-1");
+  });
+
+  it("mode (plan) auto-aprova em headless (senão pendura) — sem --permission-mode plan", () => {
+    // --permission-mode plan trava em headless esperando aprovação do plano; usamos skip-permissions
+    // e o read-only do plan no claude fica por prompt+sandbox (o read-only duro é do codex).
+    const args = buildClaudeArgs({ prompt: "map", mode: "plan" });
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).not.toContain("--permission-mode");
+  });
+
+  it("não auto-aprova sem force nem mode (evita pendurar só quando não há intenção de rodar)", () => {
+    expect(buildClaudeArgs({ prompt: "x" })).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("é selecionado pelo dispatcher buildArgs", () => {
+    const opts = { prompt: "hi", model: "opus" };
+    expect(buildArgs("claude", opts)).toEqual(buildClaudeArgs(opts));
+  });
+});
+
+describe("agentPrompt injection (cross-engine, não só claude)", () => {
+  const persona = "You are a strict reviewer.";
+
+  it("claude injeta a persona via --append-system-prompt", () => {
+    const args = buildClaudeArgs({ prompt: "review", agentPrompt: persona });
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toBe(persona);
+  });
+
+  it("grok injeta a persona via --rules", () => {
+    const args = buildGrokArgs({ prompt: "review", agentPrompt: persona });
+    expect(args[args.indexOf("--rules") + 1]).toBe(persona);
+  });
+
+  it("codex injeta a persona via -c developer_instructions (TOML-encoded)", () => {
+    const args = buildCodexArgs({ prompt: "review", agentPrompt: 'has "quotes"\nand newline' });
+    const ci = args.find((a) => a.startsWith("developer_instructions="));
+    expect(ci).toBe('developer_instructions="has \\"quotes\\"\\nand newline"');
+  });
+
+  it("cursor (fallback) prefixa a persona no prompt", () => {
+    const args = buildCursorArgs({ prompt: "review", agentPrompt: persona });
+    expect(args.at(-1)).toBe(`${persona}\n\n---\n\nreview`);
+  });
+
+  it("nenhum canal aparece quando agentPrompt está ausente", () => {
+    expect(buildClaudeArgs({ prompt: "x" })).not.toContain("--append-system-prompt");
+    expect(buildGrokArgs({ prompt: "x" })).not.toContain("--rules");
+    expect(buildCodexArgs({ prompt: "x" }).some((a) => a.startsWith("developer_instructions="))).toBe(false);
   });
 });
 

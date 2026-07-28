@@ -4,7 +4,24 @@ import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 
 /** CLIs suportados. Cada engine tem dialeto de args e parser de saída próprios. */
-export type Engine = "cursor" | "grok" | "codex";
+export type Engine = "cursor" | "grok" | "codex" | "claude";
+
+/** Formata um id de sessão com o engine que deve retomá-lo. */
+export function formatSessionHandle(engine: Engine, id: string): string {
+  return `${engine}:${id}`;
+}
+
+/** Extrai engine e id de um handle; ids antigos sem prefixo continuam válidos. */
+export function parseSessionHandle(handle: string): { engine?: Engine; id: string } {
+  const separator = handle.indexOf(":");
+  if (separator === -1) return { id: handle };
+
+  const prefix = handle.slice(0, separator);
+  if (prefix !== "cursor" && prefix !== "grok" && prefix !== "codex" && prefix !== "claude") {
+    return { id: handle };
+  }
+  return { engine: prefix, id: handle.slice(separator + 1) };
+}
 
 /**
  * Binário do Cursor CLI. Default `cursor-agent` (NÃO `agent`: no PATH do user `agent` pode ser o
@@ -15,19 +32,23 @@ export const CURSOR_BIN = process.env.CURSOR_BIN ?? "cursor-agent";
 export const GROK_BIN = process.env.CURSOR_BRIDGE_GROK_BIN ?? "grok";
 /** Binário do Codex CLI. Override via CURSOR_BRIDGE_CODEX_BIN. */
 export const CODEX_BIN = process.env.CURSOR_BRIDGE_CODEX_BIN ?? "codex";
+/** Binário do Claude Code CLI. Override via CURSOR_BRIDGE_CLAUDE_BIN. */
+export const CLAUDE_BIN = process.env.CURSOR_BRIDGE_CLAUDE_BIN ?? "claude";
 
 /**
- * Modelo default: Composer 2.5 no modo Fast (bracket `fast=true`). NUNCA `auto` — o worker do bridge
- * precisa ser barato/rápido e determinístico. Override via CURSOR_BRIDGE_MODEL.
+ * Modelo default do fallback cursor (só usado quando CURSOR_ENABLED e o engine é cursor). O
+ * cursor-agent atual NÃO aceita mais o bracket `[fast=true]` — os ids viraram planos com sufixo
+ * (`composer-2.5-fast`). NUNCA `auto`. Override via CURSOR_BRIDGE_MODEL.
  */
-export const DEFAULT_MODEL = process.env.CURSOR_BRIDGE_MODEL ?? "composer-2.5[fast=true]";
+export const DEFAULT_MODEL = process.env.CURSOR_BRIDGE_MODEL ?? "composer-2.5-fast";
 
 /**
- * Modelo default do `explore`/`read_slice`/`run_filtered`/`web_lookup`: Composer 2.5 Fast. Mesmo
- * racional do DEFAULT_MODEL — localizar/ler/filtrar pede o modelo mais barato e ágil, não `auto`.
- * Override via CURSOR_BRIDGE_EXPLORE_MODEL. Só se aplica quando o chamador não passa `model`.
+ * Modelo barato de leitura do `explore`/`read_slice`/`run_filtered`/`web_lookup`: GPT-5.6 Luna via
+ * codex (keyless, pela assinatura Codex), rodando read-only (`-s read-only`). Substitui o composer do
+ * cursor cancelado — localizar/ler/filtrar pede o modelo mais barato e ágil. Override via
+ * CURSOR_BRIDGE_EXPLORE_MODEL. Só se aplica quando o chamador não passa `model`.
  */
-export const EXPLORE_MODEL = process.env.CURSOR_BRIDGE_EXPLORE_MODEL ?? "composer-2.5[fast=true]";
+export const EXPLORE_MODEL = process.env.CURSOR_BRIDGE_EXPLORE_MODEL ?? "gpt-5.6-luna";
 
 /**
  * Modelo codex que dispara o image_gen built-in (gpt-image-2 faz o trabalho pesado; effort baixo basta).
@@ -38,8 +59,27 @@ export const IMAGE_MODEL = process.env.CURSOR_BRIDGE_IMAGE_MODEL ?? "gpt-5.6-sol
 /** Se truthy, passa --force (roda comandos sem prompt). Default off por segurança. */
 export const FORCE = ["1", "true", "yes"].includes((process.env.CURSOR_BRIDGE_FORCE ?? "").toLowerCase());
 
-/** Timeout padrão (ms). Override via CURSOR_BRIDGE_TIMEOUT_MS. */
-export const DEFAULT_TIMEOUT_MS = Number(process.env.CURSOR_BRIDGE_TIMEOUT_MS ?? 600_000);
+/**
+ * Fallback para o cursor-agent. O usuário cancelou a assinatura do Cursor, então por padrão os tiers
+ * NÃO caem no cursor quando a engine preferida (codex/grok/claude) falta — erram com mensagem clara.
+ * Reative o fallback (código do cursor continua íntegro) com CURSOR_BRIDGE_ENABLE_CURSOR=1.
+ */
+export const CURSOR_ENABLED = ["1", "true", "yes"].includes(
+  (process.env.CURSOR_BRIDGE_ENABLE_CURSOR ?? "").toLowerCase(),
+);
+
+/**
+ * Timeout padrão (ms): rede de segurança generosa contra travamentos reais, não orçamento de trabalho.
+ * Override via CURSOR_BRIDGE_TIMEOUT_MS.
+ */
+export const DEFAULT_TIMEOUT_MS = Number(process.env.CURSOR_BRIDGE_TIMEOUT_MS ?? 1_800_000);
+
+/** Nota de time budget anexada ao prompt de tarefas longas: o worker se auto-gerencia em vez de
+ *  ser morto cego ao estourar o timeout. */
+export function budgetNote(timeoutMs: number): string {
+  const min = Math.max(1, Math.round(timeoutMs / 60_000));
+  return `\n\n[Time budget: ~${min} min. If you are running low on time, stop and return partial results with a clear note on what remains — do not risk being cut off mid-work.]`;
+}
 
 /** Se truthy, loga o comando spawnado e espelha o stderr do child em tempo real. Debug. */
 export const DEBUG = ["1", "true", "yes"].includes((process.env.CURSOR_BRIDGE_DEBUG ?? "").toLowerCase());
@@ -73,6 +113,10 @@ const SANDBOX_ENGINE_RO: Record<Engine, string[]> = {
   cursor: [], // auth do cursor já vem no SANDBOX_HOME_RO base
   grok: [], // grok precisa de RW em ~/.grok (auth, skills e cache) — ver SANDBOX_ENGINE_RW
   codex: [], // codex precisa de RW em ~/.codex (state/cache/locks/socket) — ver SANDBOX_ENGINE_RW
+  // claude: SÓ a credencial de auth (oauth da assinatura). NUNCA ~/.claude inteiro — isso traz
+  // settings/agents/mcp.json de volta, o que reinfla o contexto (o worker roda com --bare +
+  // --append-system-prompt, então não precisa descobrir agents/rules no HOME).
+  claude: [".claude/.credentials.json", ".claude.json"],
 };
 /**
  * Subpaths do HOME RW por engine. Grok precisa de auth/skills/cache em ~/.grok; o codex tem
@@ -83,6 +127,9 @@ const SANDBOX_ENGINE_RW: Record<Engine, string[]> = {
   cursor: [],
   grok: [".grok"],
   codex: [".codex"],
+  // claude escreve estado de sessão/telemetria em ~/.claude ao rodar headless; sem RW o run pode
+  // falhar. Damos RW só em subpaths de estado, nunca settings/agents (que ficam no HOME isolado).
+  claude: [".claude/statsig", ".claude/projects", ".claude/todos", ".claude/shell-snapshots"],
 };
 /** Subpaths do HOME liberados RW: caches de build (acelera runs seguidos). */
 const SANDBOX_HOME_RW = [".gradle", ".m2", ".cache/uv", ".cache/pip"];
@@ -111,8 +158,10 @@ export interface SandboxSpec {
   isoHome: string;
   /** dir montado como /tmp dentro do sandbox (RW, efêmero). */
   tmpDir: string;
-  /** cwd do run, montado RW — sempre o último bind pra nunca ser sobreposto. */
+  /** cwd do run — sempre o último bind pra nunca ser sobreposto. */
   workspace: string;
+  /** monta o workspace como somente leitura quando true. */
+  workspaceRo: boolean;
   systemRo: string[];
   homeRo: string[];
   homeRw: string[];
@@ -134,7 +183,7 @@ export function buildSandboxArgs(spec: SandboxSpec): string[] {
   for (const p of spec.homeRo) args.push("--ro-bind", p, p);
   for (const p of spec.homeRw) args.push("--bind", p, p);
   for (const p of spec.extraBinds) args.push("--bind", p, p);
-  args.push("--bind", spec.workspace, spec.workspace);
+  args.push(spec.workspaceRo ? "--ro-bind" : "--bind", spec.workspace, spec.workspace);
   args.push(
     "--setenv", "HOME", spec.home,
     "--setenv", "USER", spec.user,
@@ -163,7 +212,11 @@ function bwrapPath(): string | null {
 }
 
 /** Cria os dirs efêmeros e sonda os paths existentes pra montar o SandboxSpec. */
-export function buildSandboxSpec(workspace: string, engine: Engine): { spec: SandboxSpec; cleanup: () => void } {
+export function buildSandboxSpec(
+  workspace: string,
+  engine: Engine,
+  workspaceRo = false,
+): { spec: SandboxSpec; cleanup: () => void } {
   const home = process.env.HOME ?? homedir();
   const isoHome = mkdtempSync(join(tmpdir(), "cbx-home-"));
   const tmpDir = mkdtempSync(join(tmpdir(), "cbx-tmp-"));
@@ -177,6 +230,7 @@ export function buildSandboxSpec(workspace: string, engine: Engine): { spec: San
     isoHome,
     tmpDir,
     workspace,
+    workspaceRo,
     systemRo: SANDBOX_SYSTEM_RO.filter((p) => existsSync(p)),
     // base (toolchains + cursor auth) + os subpaths RO específicos do engine (auth/libs do CLI)
     homeRo: [...SANDBOX_HOME_RO, ...SANDBOX_ENGINE_RO[engine]].map(abs).filter((p) => existsSync(p)),
@@ -201,8 +255,10 @@ export interface RunOpts {
   model?: string;
   effort?: string;
   resume?: string;
-  /** read-only mode para discovery/analyze: "plan" | "ask". */
+  /** read-only mode para discovery/analyze: "plan" | "ask". No codex vira `-s read-only`. */
   mode?: "plan" | "ask";
+  /** Habilita a busca web da engine (codex: `-c tools.web_search=true`). Usado por web_lookup. */
+  web?: boolean;
   /** Auto-aprova as tools deste run (--force), independente do env global. web_lookup precisa. */
   force?: boolean;
   cwd?: string;
@@ -210,6 +266,17 @@ export interface RunOpts {
   timeoutMs?: number;
   /** Imagens de entrada anexadas ao prompt (codex -i). Usado por generate_image para edição. */
   images?: string[];
+  /**
+   * Persona/system-prompt de um agent especializado, injetada pelo canal aditivo de cada engine
+   * (claude --append-system-prompt, grok --rules, codex -c developer_instructions, cursor prefixo).
+   * Resolvida no host por resolveAgent (src/agents.ts). Cross-engine — não é exclusiva do claude.
+   */
+  agentPrompt?: string;
+}
+
+/** Codifica uma string como TOML basic string (aspas + escapes) para `-c key=value` do codex. */
+export function tomlString(s: string): string {
+  return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "")}"`;
 }
 
 /**
@@ -232,18 +299,21 @@ export function buildCursorArgs(opts: RunOpts): string[] {
   if (opts.mode) args.push("--mode", opts.mode);
   if (opts.resume) args.push("--resume", opts.resume);
   if (FORCE || opts.force) args.push("--force");
-  args.push(opts.prompt);
+  // cursor-agent não tem canal de system-prompt aditivo; a persona vai como prefixo do prompt (fallback).
+  args.push(opts.agentPrompt ? `${opts.agentPrompt}\n\n---\n\n${opts.prompt}` : opts.prompt);
   return args;
 }
 
 /**
  * Args do Grok CLI (`grok`). Dialeto próprio: prompt é VALOR de `--single`, effort é flag separada
- * (`--reasoning-effort`), autonomia é `--always-approve` (não `--force`). Função pura — testável.
+ * (`--effort` — o xAI CLI atual renomeou `--reasoning-effort` → `--effort`), autonomia é
+ * `--always-approve` (não `--force`). Função pura — testável.
  */
 export function buildGrokArgs(opts: RunOpts): string[] {
   const args = ["--single", opts.prompt, "--output-format", "json"];
   if (opts.model) args.push("-m", opts.model);
-  if (opts.effort) args.push("--reasoning-effort", opts.effort);
+  if (opts.effort) args.push("--effort", opts.effort);
+  if (opts.agentPrompt) args.push("--rules", opts.agentPrompt); // canal aditivo de system prompt do grok
   args.push("--always-approve");
   if (opts.resume) args.push("-r", opts.resume);
   return args;
@@ -257,9 +327,17 @@ export function buildCodexArgs(opts: RunOpts): string[] {
   // --ignore-user-config: NÃO carrega ~/.codex/config.toml (que traz MCP servers externos — o codex
   // pendurava tentando conectá-los até timeout, subindo N processos). --ignore-rules: idem para .rules.
   // Auth continua via CODEX_HOME. Isso complementa o sandbox (defense-in-depth).
-  const flags = ["--json", "--ignore-user-config", "--ignore-rules", "--dangerously-bypass-approvals-and-sandbox"];
+  const flags = ["--json", "--ignore-user-config", "--ignore-rules"];
+  // read-only (explore/read_slice/web_lookup) → sandbox read-only do codex + sem pedir aprovação
+  // (senão pendura em headless). Sem mode (delegate/generate_image) → bypass total (full access).
+  if (opts.mode) flags.push("-s", "read-only", "-c", 'approval_policy="never"');
+  else flags.push("--dangerously-bypass-approvals-and-sandbox");
+  if (opts.web) flags.push("-c", "tools.web_search=true"); // busca web (web_lookup)
   if (opts.model) flags.push("-m", opts.model);
   if (opts.effort) flags.push("-c", `model_reasoning_effort="${opts.effort}"`);
+  // persona aditiva do codex: developer_instructions (developer-role), TOML-encoded. NÃO usamos
+  // AGENTS.md nem model_instructions_file (esse último SUBSTITUI as instruções do codex).
+  if (opts.agentPrompt) flags.push("-c", `developer_instructions=${tomlString(opts.agentPrompt)}`);
   if (opts.images?.length) {
     for (const file of opts.images) flags.push("-i", file);
   }
@@ -271,16 +349,47 @@ export function buildCodexArgs(opts: RunOpts): string[] {
   return ["exec", ...flags, ...sep, opts.prompt];
 }
 
+/**
+ * Args do Claude Code CLI (`claude -p`). Dialeto próprio: `--print` headless, prompt posicional,
+ * autonomia via `--dangerously-skip-permissions`, resume via `--resume <id>`. Saída `--output-format
+ * json` tem a forma `{result, session_id}` (mesma do cursor → parseCliJson).
+ *
+ * NÃO usar `--bare`: ele quebra a resolução de auth (a CLI retorna "Not logged in"). Em vez disso
+ * isolamos a config do usuário como o sandbox faz para os outros engines: `--strict-mcp-config` (sem
+ * `--mcp-config` → ZERO MCP servers, o codex/cursor não sobem os MCP do user e o claude também não) e
+ * `--setting-sources project` (ignora ~/.claude/settings, o HOME isolado do sandbox já está vazio).
+ * Função pura — testável.
+ */
+export function buildClaudeArgs(opts: RunOpts): string[] {
+  const args = [
+    "-p", "--output-format", "json",
+    "--strict-mcp-config",
+    "--setting-sources", "project",
+  ];
+  if (opts.model) args.push("--model", opts.model);
+  if (opts.agentPrompt) args.push("--append-system-prompt", opts.agentPrompt); // canal nativo do claude
+  // Headless PRECISA auto-aprovar ou pendura esperando confirmação (inclusive `--permission-mode plan`,
+  // que trava pedindo aprovação do plano). force (delegate/build) e mode (plan) rodam não-interativos →
+  // skip-permissions. O read-only "duro" do plan fica com o codex (-s read-only); no claude o plan é
+  // read-only por prompt + sandbox (o worker é instruído a não editar e o sandbox contém o raio ao cwd).
+  if (FORCE || opts.force || opts.mode) args.push("--dangerously-skip-permissions");
+  if (opts.resume) args.push("--resume", opts.resume);
+  args.push(opts.prompt);
+  return args;
+}
+
 /** Despacha a montagem de args pelo engine. */
 export function buildArgs(engine: Engine, opts: RunOpts): string[] {
   if (engine === "grok") return buildGrokArgs(opts);
   if (engine === "codex") return buildCodexArgs(opts);
+  if (engine === "claude") return buildClaudeArgs(opts);
   return buildCursorArgs(opts);
 }
 
 export interface CliResult {
   text: string;
   sessionId?: string;
+  engine?: Engine;
 }
 
 /**
@@ -344,7 +453,9 @@ export function binExists(bin: string): boolean {
 /** true se o CLI do engine está instalado. cursor é sempre assumido presente. */
 export function hasEngine(engine: Engine): boolean {
   if (engine === "cursor") return true;
-  return binExists(engine === "grok" ? GROK_BIN : CODEX_BIN);
+  if (engine === "grok") return binExists(GROK_BIN);
+  if (engine === "codex") return binExists(CODEX_BIN);
+  return binExists(CLAUDE_BIN); // claude
 }
 
 export interface Tier {
@@ -353,41 +464,54 @@ export interface Tier {
   effort?: string;
 }
 
+/** Entrada da matriz de tiers: engine/modelo preferido + o id equivalente no cursor (fallback). */
+interface TierEntry {
+  primary: Tier;
+  /** Modelo cursor-agent equivalente, usado só quando CURSOR_ENABLED e a engine preferida falta. */
+  cursorModel: string;
+}
+
 /**
- * Roteia o nível (1-5) do `delegate` para (engine, modelo, effort). A dificuldade sobe com o nível:
- * 1 = Composer 2.5 Fast (barato); 2/3 = Grok 4.5 (effort médio/máx); 4/5 = GPT-5.6 Sol (médio/máx).
- * Quando o CLI preferido (grok/codex) não está instalado, cai para o modelo equivalente no
- * cursor-agent — "usa o grok/codex se tiver, senão o cursor-agent". `has` é injetado para teste.
+ * Matriz do `delegate`: cada nível usa um MODELO DISTINTO, sem repetir entre níveis, escalando a
+ * dificuldade e distribuindo pelas 3 assinaturas (codex/grok/claude). O cursor saiu do caminho
+ * padrão (assinatura cancelada) — vira fallback só sob CURSOR_ENABLED. Leitura barata (explore/
+ * read_slice) reaproveita o modelo do nível 1 (gpt-5.6-luna).
  */
-export function resolveTier(level: number, has: (e: Engine) => boolean = hasEngine): Tier {
-  switch (level) {
-    case 1:
-      return { engine: "cursor", model: "composer-2.5[fast=true]" };
-    case 2:
-      return has("grok")
-        ? { engine: "grok", model: "grok-4.5", effort: "medium" }
-        : { engine: "cursor", model: "cursor-grok-4.5-high-fast" };
-    case 3:
-      return has("grok")
-        ? { engine: "grok", model: "grok-4.5", effort: "high" }
-        : { engine: "cursor", model: "cursor-grok-4.5-high-fast" };
-    case 4:
-      return has("codex")
-        ? { engine: "codex", model: "gpt-5.6-sol", effort: "medium" }
-        : { engine: "cursor", model: "gpt-5.6-sol-high-fast" };
-    case 5:
-      return has("codex")
-        ? { engine: "codex", model: "gpt-5.6-sol", effort: "high" }
-        : { engine: "cursor", model: "gpt-5.6-sol-xhigh-fast" };
-    default:
-      throw new Error(`invalid delegate level: received ${level}, expected integer 1-5`);
-  }
+const TIERS: Record<number, TierEntry> = {
+  1: { primary: { engine: "codex", model: "gpt-5.6-luna" }, cursorModel: "composer-2.5-fast" },
+  2: { primary: { engine: "grok", model: "grok-4.5", effort: "medium" }, cursorModel: "cursor-grok-4.5-medium-fast" },
+  3: { primary: { engine: "codex", model: "gpt-5.6-terra", effort: "medium" }, cursorModel: "gpt-5.6-terra-medium-fast" },
+  4: { primary: { engine: "codex", model: "gpt-5.6-sol", effort: "medium" }, cursorModel: "gpt-5.6-sol-medium-fast" },
+  5: { primary: { engine: "claude", model: "opus" }, cursorModel: "claude-opus-4-8-high-fast" },
+};
+
+/**
+ * Roteia o nível (1-5) para (engine, modelo, effort). Usa a engine preferida do nível se instalada.
+ * Se faltar: cai para o cursor-agent SÓ quando CURSOR_ENABLED (assinatura reativada); senão lança
+ * erro claro dizendo o que instalar. `has`/`cursorEnabled` são injetados para teste.
+ */
+export function resolveTier(
+  level: number,
+  has: (e: Engine) => boolean = hasEngine,
+  cursorEnabled: boolean = CURSOR_ENABLED,
+): Tier {
+  const entry = TIERS[level];
+  if (!entry) throw new Error(`invalid delegate level: received ${level}, expected integer 1-5`);
+  if (has(entry.primary.engine)) return entry.primary;
+  if (cursorEnabled) return { engine: "cursor", model: entry.cursorModel };
+  throw new Error(
+    `delegate level ${level} needs the '${entry.primary.engine}' CLI, which is not installed. ` +
+    "Install it, pick another level, or set CURSOR_BRIDGE_ENABLE_CURSOR=1 to fall back to cursor-agent.",
+  );
 }
 
 /** Roda o CLI do engine em modo headless e devolve o resultado parseado. */
 export function runCursor(opts: RunOpts): Promise<CliResult> {
   const engine = opts.engine ?? "cursor";
-  const bin = engine === "grok" ? GROK_BIN : engine === "codex" ? CODEX_BIN : CURSOR_BIN;
+  const bin = engine === "grok" ? GROK_BIN
+    : engine === "codex" ? CODEX_BIN
+    : engine === "claude" ? CLAUDE_BIN
+    : CURSOR_BIN;
   const engineArgs = buildArgs(engine, opts);
   const workspace = opts.cwd ?? process.cwd();
 
@@ -399,7 +523,7 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
   let cleanup = () => {};
   const bwrap = SANDBOX_ON ? bwrapPath() : null;
   if (bwrap) {
-    const built = buildSandboxSpec(workspace, engine);
+    const built = buildSandboxSpec(workspace, engine, !!opts.mode);
     cleanup = built.cleanup;
     cmd = bwrap;
     args = [...buildSandboxArgs(built.spec), bin, ...engineArgs];
@@ -441,7 +565,7 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
         reject(new Error(`${engine} agent exited ${code}: ${stderr.trim() || stdout.trim()}`));
         return;
       }
-      resolve(parseOutput(engine, stdout));
+      resolve({ ...parseOutput(engine, stdout), engine });
     });
   });
 }
