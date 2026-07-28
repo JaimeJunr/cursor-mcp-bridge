@@ -31,18 +31,24 @@ the **pure logic is testable without spawning a worker process**:
 
 - `index.ts` — MCP server + tool registrations (ten tools: `delegate`, `explore`, `read_slice`,
   `run_filtered`, `web_lookup`, `generate_image`, `plan`, `build`, `follow_up`, `bridge_stats`).
-  Owns tool descriptions and the shared `routing` params (`cwd`/`model`/`effort`). `format()`
-  appends the `session_id` footer and logs usage; `follow_up` feeds that id back as `RunOpts.resume`
-  so a prior worker session continues without resending its context — the footer and `follow_up`
-  are two ends of the same loop.
+  Owns tool descriptions and the shared `routing` params (`cwd`/`model`/`effort`). The second arg
+  to `new McpServer(...)` is an `instructions` string that states the routing boundary
+  (read/locate/web/grunt-work → bridge tools; native Read only when about to edit). These load at
+  **startup** and are visible to the host even while tool schemas are deferred — that is why they
+  matter for adoption. The five core tools (`delegate`, `explore`, `read_slice`, `run_filtered`,
+  `web_lookup`) register with `_meta: { "anthropic/alwaysLoad": true }` so Claude Code (≥2.1.121)
+  eagerly loads their schemas; secondary tools (`generate_image`, `plan`, `build`, `follow_up`,
+  `bridge_stats`) stay deferred. `format()` appends the `session_id` footer and logs usage;
+  `follow_up` feeds that id back as `RunOpts.resume` so a prior worker session continues without
+  resending its context — the footer and `follow_up` are two ends of the same loop.
   `follow_up` takes an optional `mode` — without it, a resumed session regains full tool access, so
   continuing a read-only session (`explore`/`read_slice`/`web_lookup`) must pass `mode:'ask'` to stay
   read-only. The default (no mode) is for continuing a `delegate`.
 - `cli.ts` — the only module that touches the child process. `runCursor()` spawns the engine's CLI;
   `buildCursorArgs()`/`buildGrokArgs()`/`buildCodexArgs()`/`buildClaudeArgs()` (+ `buildArgs`
   dispatcher), `resolveModel()`, `parseCliJson()`/`parseCodexJsonl()` (+ `parseOutput` dispatcher),
-  `resolveTier()`, `hasEngine()`, `binExists()` are **pure** and unit-tested. Keep the spawn boundary
-  here — do not spawn from elsewhere.
+  `resolveTier()`, `hasEngine()`, `binExists()`, `budgetNote()` are **pure** and unit-tested. Keep
+  the spawn boundary here — do not spawn from elsewhere.
 - `agents.ts` — resolves an optional `delegate`/`build` persona on the host. A name such as
   `pit:issue-investigator` searches project/home `.claude/agents` and `~/.claude/plugins`; plugin
   collisions pick the newest match by mtime. An inline `{prompt}` skips lookup. Only the markdown
@@ -169,30 +175,52 @@ points, all in `cli.ts`:
 - **`parseCliJson` degrades gracefully**: non-JSON stdout falls back to raw text; `usage.ts`
   skips malformed JSONL lines. Match this best-effort posture — logging/parsing must never throw
   up into a tool call.
+- **Core tools are `alwaysLoad`.** The five core tools (`delegate`, `explore`, `read_slice`,
+  `run_filtered`, `web_lookup`) register with `_meta: { "anthropic/alwaysLoad": true }` so Claude
+  Code (≥2.1.121) eagerly loads their schemas instead of deferring them. Deferred tools lose to
+  always-loaded native Read/Grep — that was the root adoption bug. Secondary tools
+  (`generate_image`, `plan`, `build`, `follow_up`, `bridge_stats`) stay deferred. Do not strip
+  `alwaysLoad` from the core five or add it to the secondary set without intent.
+- **Timeout is a safety net, not a work budget.** `DEFAULT_TIMEOUT_MS` is 30 min (`1_800_000`),
+  overridable via `CURSOR_BRIDGE_TIMEOUT_MS`. Pure helper `budgetNote(timeoutMs)` appends a
+  `[Time budget: ~N min ... return partial results ...]` note to the prompt of the three
+  **execution** tools (`delegate`, `plan`, `build`) so the worker self-manages instead of being
+  killed blind. Read tools (`explore`, `read_slice`, `run_filtered`, `web_lookup`) do not get it.
+  Keep that split.
 
 ## The hook (`hooks/prefer-cursor-bridge.mjs`)
 
 Ships separately from the server: a hook the host wires (in its `settings.json`) as a `PreToolUse`
 matcher for `Read|Grep|Glob|WebSearch|WebFetch|Bash` and `Agent|Task`, plus a `SessionStart` entry —
-each pointing at `hooks/prefer-cursor-bridge.mjs`. It nudges the
-agent toward the bridge because these MCP tools are **deferred** (schemas load only via ToolSearch)
-and lose to always-loaded native tools by default. On `Bash` it only fires for artifact-writing
-commands (`git commit`/`push`, `git worktree add`, `gh pr create`, `bkt pr create`) — nudging that
-grunt-work to `delegate`; read-only Bash is left alone (rtk already trims it). Design constraints,
-all tested in `test/hook.test.ts`:
+each pointing at `hooks/prefer-cursor-bridge.mjs`. It steers the agent toward the bridge. Env
+`CURSOR_BRIDGE_HOOK_MODE` = `off` | `nudge` | `redirect` (default **`redirect`**): `off` does
+nothing; `nudge` is the old non-blocking `additionalContext` behavior; `redirect` returns
+`permissionDecision: "deny"` (via `denyRedirect()`) for the two safe-to-block cases. On `Bash` it
+only fires for artifact-writing commands (`git commit`/`push`, `git worktree add`, `gh pr create`,
+`bkt pr create`) — nudging that grunt-work to `delegate`; read-only Bash is left alone (rtk already
+trims it). Design constraints, all tested in `test/hook.test.ts`:
 
 - Pure decision in `decide(input, deps)` with injectable fs — that's what the tests exercise.
-  The I/O wrapper (`main`) only runs when invoked as a script.
+  `decide()` returns `{ keys, text, redirect }`. The I/O wrapper (`main`) only runs when invoked as
+  a script.
+- **Redirect mode (default):** for WebSearch/WebFetch → `web_lookup` and whole-file large Read
+  (no offset/limit, ≥ `CURSOR_BRIDGE_HOOK_MIN_LINES`) → `read_slice`, the hook **denies** the native
+  call once and names the bridge tool in the reason. It is **one-shot + fail-open**: per-session
+  dedup keys are saved **before** emitting, so the second identical call is allowed through; the
+  deny reason (`FAILOPEN_SUFFIX`) explicitly tells the model it may retry — critical under headless
+  `-p` so it never hard-stalls. It **never** redirects Grep/Glob/Bash/Edit/Write (those stay
+  nudge-only; blocking edits or git would break the host).
 - **Dedup per session** (keyed by `session_id` in an `os.tmpdir()` file, mode `0600`): every
-  nudge fires at most once. A repeated nudge is worse than none. This is why `Grep`/`Glob` can
-  sit in the matcher — they collapse to a single preload reminder.
+  nudge/redirect fires at most once. A repeated fire is worse than none. This is why `Grep`/`Glob`
+  can sit in the matcher — they collapse to a single preload reminder.
 - The first qualifying nudge of a session also carries the one-time preload reminder.
 - **`SessionStart` closes the Bash-grep hole:** the PreToolUse preload only fires on the `Grep`/`Read`
   tool, but agents often use `Bash grep` (matches no matcher), so the preload never arrived.
   `sessionStartContext()` injects it as `additionalContext` before the first tool decision and
   pre-marks `preload` in the dedup file so the PreToolUse piggyback never repeats it.
-- Never blocks the tool; any error → print nothing, exit 0.
-- Threshold for the Read nudge is `CURSOR_BRIDGE_HOOK_MIN_LINES` (default 300).
+- Fail-open on errors: any error → print nothing, exit 0. Agent/Task and SessionStart paths are
+  unchanged by redirect mode.
+- Threshold for the large-Read redirect/nudge is `CURSOR_BRIDGE_HOOK_MIN_LINES` (default 300).
 
 The hook also matches **`Agent|Task`** to reach spawned subagents (`buildAgentUpdatedInput` +
 `handleAgent`). When `subagent_type === "Explore"`, `agentPref()` appends `EXPLORE_EXTRA` — an extra

@@ -82,9 +82,10 @@ claude mcp add cursor-bridge -s user -- node /abs/path/to/cursor-mcp-bridge/dist
 | `CURSOR_BRIDGE_AGENT_PATHS` | _(off)_ | Additional `:`-separated roots for named agent personas, searched before project/home `.claude/agents` and `~/.claude/plugins`. |
 | `CURSOR_BRIDGE_SANDBOX` | `bwrap` | Isolates every engine in a bubblewrap sandbox with an empty `$HOME`, preventing global config, MCP servers, hooks, and skills from loading. Only auth, required engine state, and toolchains are bound in. Set `off`/`0` to disable; falls back to unsandboxed if `bwrap` is missing. |
 | `CURSOR_BRIDGE_FORCE` | _(off)_ | If `1`/`true`, force-enable non-interactive approval for Cursor and Claude runs. |
-| `CURSOR_BRIDGE_TIMEOUT_MS` | `600000` | Per-call timeout. |
+| `CURSOR_BRIDGE_TIMEOUT_MS` | `1800000` (30 min) | Per-call safety-net timeout (not a work budget). Execution tools (`delegate`/`plan`/`build`) also get a prompt note so the worker returns partial results before being killed. |
 | `CURSOR_BRIDGE_LOG` | _(off)_ | Path to a JSONL file; when set, every call logs `{tool, outChars}` for `bridge_stats`. |
-| `CURSOR_BRIDGE_HOOK_MIN_LINES` | `300` | Line threshold above which the optional hook (below) nudges toward `read_slice`. |
+| `CURSOR_BRIDGE_HOOK_MODE` | `redirect` | Hook behavior: `off` (no-op), `nudge` (non-blocking `additionalContext` only), or `redirect` (deny once + name bridge tool for WebSearch/WebFetch and whole-file large Read; fail-open on retry). Grep/Glob/Bash/Edit/Write stay nudge-only. |
+| `CURSOR_BRIDGE_HOOK_MIN_LINES` | `300` | Line threshold above which the optional hook (below) redirects/nudges whole-file Read toward `read_slice`. |
 | `CURSOR_BRIDGE_AGENT_DELAY_MS` | `350` | Delay before the `Agent\|Task` injection emits, to win the last-wins race vs context-mode. `0` disables. |
 | `CONTEXT_MODE_ROUTING` | _(marketplace path)_ | Override path to context-mode's `routing.mjs` (imported to preserve its block in subagents). |
 
@@ -96,17 +97,21 @@ claude mcp add cursor-bridge -s user -- node /abs/path/to/cursor-mcp-bridge/dist
 ## Make the agent actually use it
 
 Registering the tools is not enough. Two structural forces push the agent back to
-native tools: (1) the host rule "prefer the dedicated file/search tools", and (2) these
-MCP tools are usually **deferred** — the agent must run a tool-search to even load their
-schemas, so the always-loaded `Read`/`Grep`/`WebSearch` win by default. Four fixes,
-strongest first:
+native tools: (1) the host rule "prefer the dedicated file/search tools", and (2) MCP
+tools used to be **deferred** — the agent had to run a tool-search to load their schemas,
+so always-loaded `Read`/`Grep`/`WebSearch` won by default. The server now publishes
+**startup `instructions`** (routing boundary) and marks the five core tools with
+`_meta: { "anthropic/alwaysLoad": true }` (Claude Code ≥2.1.121) so their schemas load
+eagerly; secondary tools stay deferred. Four fixes, strongest first:
 
-**1. Call-time hook (recommended).** A `PreToolUse` hook that nudges the agent toward
+**1. Call-time hook (recommended).** A `PreToolUse` hook that steers the agent toward
 the bridge at the moment it reaches for a native tool — text in a config file loses under
 pressure, a call-time reminder does not. This repo ships one at
-[`hooks/prefer-cursor-bridge.mjs`](hooks/prefer-cursor-bridge.mjs): it is non-blocking,
-runs on `node` (already required), and only fires where it pays. Wire it into your host's
-settings (Claude Code `settings.json`):
+[`hooks/prefer-cursor-bridge.mjs`](hooks/prefer-cursor-bridge.mjs): it runs on `node`
+(already required) and only fires where it pays. Default mode is **`redirect`**
+(`CURSOR_BRIDGE_HOOK_MODE=redirect`): for the two safe-to-block cases it returns
+`permissionDecision: "deny"` once and names the bridge tool; other cases stay non-blocking
+nudges. Wire it into your host's settings (Claude Code `settings.json`):
 
 ```json
 {
@@ -124,27 +129,33 @@ settings (Claude Code `settings.json`):
 ```
 
 What it emits, and when — each fires **at most once per session** (deduplicated in a tmp
-file keyed by `session_id`), because a repeated nudge is worse than none: the agent learns
-to ignore it *and* every fire costs tokens.
+file keyed by `session_id`), because a repeated fire is worse than none: the agent learns
+to ignore it *and* every fire costs tokens. Dedup keys are saved **before** emitting so
+redirect is one-shot and fail-open (a second identical call is allowed through).
 
-> - **`Read`** over `CURSOR_BRIDGE_HOOK_MIN_LINES` lines → suggests `read_slice` (once per file).
-> - **`WebSearch`/`WebFetch`** → suggests `web_lookup` (once).
-> - **`Grep`/`Glob`** → emits the one-time **preload** reminder to run the `ToolSearch` for the
->   deferred bridge tools. This is why Grep/Glob can sit in the matcher without the old
->   constant-noise cost — the dedup collapses them to a single fire.
+> - **`Read`** whole-file (no offset/limit) over `CURSOR_BRIDGE_HOOK_MIN_LINES` lines →
+>   **redirect** (default) or nudge toward `read_slice` (once per file). Partial reads are left alone.
+> - **`WebSearch`/`WebFetch`** → **redirect** (default) or nudge toward `web_lookup` (once).
+> - **`Grep`/`Glob`** → emits the one-time **preload** reminder to run the `ToolSearch` for any
+>   still-deferred bridge tools (nudge only — never redirected). The dedup collapses them to a
+>   single fire.
 > - **`Bash`** whose command writes an artifact (`git commit`/`push`, `git worktree add`,
 >   `gh pr create`, `gh issue create`, `bkt pr create`) → suggests offloading that grunt-work to
->   `delegate` (once). Read-only Bash (status/diff/log/checkout) is left alone — the orchestrator
->   needs that state, and a mechanical filter (e.g. rtk) already trims the noise.
+>   `delegate` (once, nudge only). Read-only Bash (status/diff/log/checkout) is left alone — the
+>   orchestrator needs that state, and a mechanical filter (e.g. rtk) already trims the noise.
 > - **`Edit`/`Write`/`MultiEdit`** → once per session, reminds that a *self-contained* task
 >   (feature, bugfix, mechanical multi-file change, build fix) can go **whole** to `delegate(prompt, level)`
 >   — the selected worker edits with full access — instead of the orchestrator implementing
->   it on expensive tokens. It never blocks the edit; the once-per-session dedup means the orchestrator
->   still edits inline freely (the nudge repositions execution, it doesn't police every edit).
-> - The **first** qualifying nudge of the session (whichever tool triggers it) also carries
->   that preload reminder, so the schemas get loaded even in a Read-only or web-only session.
+>   it on expensive tokens. It never blocks the edit (nudge only); the once-per-session dedup means
+>   the orchestrator still edits inline freely (the nudge repositions execution, it doesn't police every edit).
+> - The **first** qualifying fire of the session (whichever tool triggers it) also carries
+>   that preload reminder, so secondary schemas get loaded even in a Read-only or web-only session.
+> - Redirect deny reasons end with a fail-open suffix: if the bridge tool isn't loaded yet, run
+>   ToolSearch first; if the native tool is genuinely needed, call it again and it will be allowed
+>   (critical under headless `-p` so the agent never hard-stalls).
 
-To reset the dedup and see the nudges again, start a new session (or delete
+Set `CURSOR_BRIDGE_HOOK_MODE=nudge` for the old non-blocking behavior, or `off` to disable.
+To reset the dedup and see the fires again, start a new session (or delete
 `cursor-bridge-nudged-<session_id>.json` from your OS temp dir — `os.tmpdir()`,
 e.g. `/tmp` on Linux, not necessarily `$TMPDIR`).
 
@@ -152,10 +163,9 @@ e.g. `/tmp` on Linux, not necessarily `$TMPDIR`).
 
 The PreToolUse preload above only fires when the agent uses the **`Grep`/`Read`** tool. But
 under pressure agents often reach for **`Bash grep`** instead, which matches no PreToolUse
-matcher — so the preload reminder never arrives and the deferred bridge tools stay unloaded
-the whole session. Wire the same hook for `SessionStart` to close that hole: the preload
-reminder then lands in context **before the first tool decision**, regardless of how the agent
-searches.
+matcher — so the preload reminder never arrives. Wire the same hook for `SessionStart` to
+close that hole: the preload reminder then lands in context **before the first tool decision**,
+regardless of how the agent searches.
 
 ```json
 {
@@ -202,13 +212,14 @@ keep the expensive shell to orchestration only.
 > is the invariant). Set `CONTEXT_MODE_ROUTING` to point at a non-default path,
 > or `CURSOR_BRIDGE_AGENT_DELAY_MS=0` to disable the delay.
 
-**2. Preload the deferred tools.** Tell the agent to load the schemas once per session so
-they are "in hand". Add to your `CLAUDE.md`/`AGENTS.md`:
+**2. Preload any still-deferred tools.** The five core tools are already `alwaysLoad` on
+Claude Code ≥2.1.121. For secondary tools (or older hosts), tell the agent to load schemas
+once per session. Add to your `CLAUDE.md`/`AGENTS.md`:
 
 ```
 At the start of any session involving code reading/exploration, run tool-search once for
-`read_slice, explore, run_filtered, web_lookup` so their schemas are loaded — otherwise the
-deferred tools lose to the always-loaded native Read/Grep by default.
+`read_slice, explore, run_filtered, web_lookup` (and any secondary bridge tools you need) so
+their schemas are loaded if the host still defers them.
 ```
 
 **3. Reconcile the conflict in `CLAUDE.md`.** State the precedence explicitly:
