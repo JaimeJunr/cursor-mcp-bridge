@@ -6,7 +6,7 @@ import { runCursor, EXPLORE_MODEL, IMAGE_MODEL, hasEngine, resolveTier, type Cli
 import { resolveAgent } from "./agents.js";
 import {
   readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
-  generateImagePrompt, generateImageGrokPrompt,
+  generateImagePrompt, generateImageGrokPrompt, planPrompt, buildPrompt,
 } from "./prompts.js";
 import { logUsage, readUsage, aggregate } from "./usage.js";
 
@@ -24,6 +24,14 @@ const routing = {
     .optional()
     .describe("Reasoning effort for parameterized models (e.g. 'low'|'high'). Ignored by 'auto'."),
 };
+
+// Persona especializada, resolvida no host por resolveAgent. Compartilhada por delegate e build.
+const agentSchema = z.union([
+  z.string(),
+  z.object({ prompt: z.string(), name: z.string().optional(), model: z.string().optional() }),
+]);
+const agentDescription =
+  "Run the worker as a specialized agent/persona. A name (e.g. 'pit:issue-investigator' or 'code-reviewer') is resolved from .claude/agents (project + home) and ~/.claude/plugins — its system prompt is injected via each engine's native channel (claude --append-system-prompt, grok --rules, codex developer_instructions). Or pass an inline { prompt } to skip file lookup. Works on every level/engine, not just claude.";
 
 /** Formata o resultado do Cursor e loga os chars devolvidos ao contexto (custo real). */
 function format(tool: string, res: CliResult): { content: { type: "text"; text: string }[] } {
@@ -48,17 +56,7 @@ server.registerTool(
         .min(1)
         .max(5)
         .describe("Task difficulty 1-5, each a distinct model: 1=GPT-5.6 Luna (codex), 2=Grok 4.5 (grok), 3=GPT-5.6 Terra (codex), 4=GPT-5.6 Sol (codex), 5=Claude Opus (claude). Use the lowest level that fits."),
-      agent: z
-        .union([
-          z.string(),
-          z.object({
-            prompt: z.string(),
-            name: z.string().optional(),
-            model: z.string().optional(),
-          }),
-        ])
-        .optional()
-        .describe("Run the worker as a specialized agent/persona. A name (e.g. 'pit:issue-investigator' or 'code-reviewer') is resolved from .claude/agents (project + home) and ~/.claude/plugins — its system prompt is injected via each engine's native channel (claude --append-system-prompt, grok --rules, codex developer_instructions). Or pass an inline { prompt } to skip file lookup. Works on every level/engine, not just claude."),
+      agent: agentSchema.optional().describe(agentDescription),
       timeout_ms: z
         .number()
         .int()
@@ -163,6 +161,84 @@ server.registerTool(
     // codex read-only (mode:'ask' → filesystem intocado) + web:true liga a busca web do codex
     // (-c tools.web_search=true). approval_policy=never evita pendurar em headless.
     format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask", web: true })),
+);
+
+server.registerTool(
+  "plan",
+  {
+    description:
+      "Phase 1 of plan→build: a STRONG model reads the codebase and returns an implementation PLAN — read-only, it does NOT edit anything. Review/approve the plan, then hand it to `build` (which can run a cheaper executor). Defaults to level 4 (GPT-5.6 Sol on codex) — strong AND hard read-only (-s read-only). Level 5 (Claude Opus) is also strong but read-only-by-prompt only. Returns the plan + a session_id.",
+    inputSchema: {
+      task: z.string().describe("What to plan — the feature or fix to design."),
+      level: z
+        .number()
+        .int()
+        .min(1)
+        .max(5)
+        .optional()
+        .describe("Model tier for planning (1-5). Default 4 (GPT-5.6 Sol, codex, hard read-only). Planning benefits from a strong tier."),
+      ...routing,
+    },
+  },
+  // mode:'plan' → read-only por engine (codex -s read-only é o mais forte; cursor --mode plan). O
+  // planejador lê a codebase e propõe sem editar; o prompt reforça "não editar".
+  async ({ task, level, cwd, model, effort }) => {
+    const tier = resolveTier(level ?? 4);
+    return format(
+      "plan",
+      await runCursor({
+        prompt: planPrompt(task),
+        cwd,
+        engine: tier.engine,
+        model: model ?? tier.model,
+        effort: effort ?? tier.effort,
+        mode: "plan",
+      }),
+    );
+  },
+);
+
+server.registerTool(
+  "build",
+  {
+    description:
+      "Phase 2 of plan→build: an executor model IMPLEMENTS an approved plan (typically the output of `plan`), with full tool access (edits + tests). Defaults to level 1 (cheapest) — the thinking is already done, so a cheap executor usually suffices. Optionally run as an `agent`. Returns a summary + session_id.",
+    inputSchema: {
+      plan: z.string().describe("The approved plan to implement (typically the `plan` tool output)."),
+      level: z
+        .number()
+        .int()
+        .min(1)
+        .max(5)
+        .optional()
+        .describe("Executor tier (1-5). Default 1 (cheapest). Raise only for harder implementations."),
+      agent: agentSchema.optional().describe(agentDescription),
+      timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Max wall-clock ms. Default 600000 (10 min). Raise for build-heavy tasks."),
+      ...routing,
+    },
+  },
+  async ({ plan, level, agent, timeout_ms, cwd, model, effort }) => {
+    const tier = resolveTier(level ?? 1);
+    const resolved = agent ? resolveAgent(agent, cwd ?? process.cwd()) : undefined;
+    return format(
+      "build",
+      await runCursor({
+        prompt: buildPrompt(plan),
+        cwd,
+        engine: tier.engine,
+        model: model ?? tier.model,
+        effort: effort ?? tier.effort,
+        agentPrompt: resolved?.prompt,
+        force: true,
+        timeoutMs: timeout_ms,
+      }),
+    );
+  },
 );
 
 server.registerTool(

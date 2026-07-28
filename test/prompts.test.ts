@@ -1,8 +1,25 @@
 import { describe, it, expect } from "vitest";
 import {
   readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
-  generateImagePrompt, generateImageGrokPrompt,
+  generateImagePrompt, generateImageGrokPrompt, planPrompt, buildPrompt,
 } from "../src/prompts.js";
+
+describe("planPrompt", () => {
+  it("pede um PLANO read-only (não editar) e inclui a task", () => {
+    const p = planPrompt("add a redis cache");
+    expect(p).toMatch(/DO NOT write or edit/i);
+    expect(p).toContain("add a redis cache");
+  });
+});
+
+describe("buildPrompt", () => {
+  it("embrulha o plano aprovado e exige código + testes", () => {
+    const p = buildPrompt("step 1: create Foo");
+    expect(p).toContain("APPROVED PLAN");
+    expect(p).toContain("step 1: create Foo");
+    expect(p).toMatch(/tests/i);
+  });
+});
 
 describe("readSlicePrompt", () => {
   it("names the files and the target, and forbids the full dump", () => {

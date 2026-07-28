@@ -334,8 +334,11 @@ export function buildClaudeArgs(opts: RunOpts): string[] {
   ];
   if (opts.model) args.push("--model", opts.model);
   if (opts.agentPrompt) args.push("--append-system-prompt", opts.agentPrompt); // canal nativo do claude
-  // autonomia: em headless o claude bloqueia em permissões sem isso. O sandbox contém o raio ao cwd.
-  if (FORCE || opts.force) args.push("--dangerously-skip-permissions");
+  // Headless PRECISA auto-aprovar ou pendura esperando confirmação (inclusive `--permission-mode plan`,
+  // que trava pedindo aprovação do plano). force (delegate/build) e mode (plan) rodam não-interativos →
+  // skip-permissions. O read-only "duro" do plan fica com o codex (-s read-only); no claude o plan é
+  // read-only por prompt + sandbox (o worker é instruído a não editar e o sandbox contém o raio ao cwd).
+  if (FORCE || opts.force || opts.mode) args.push("--dangerously-skip-permissions");
   if (opts.resume) args.push("--resume", opts.resume);
   args.push(opts.prompt);
   return args;

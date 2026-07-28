@@ -312,6 +312,18 @@ describe("buildClaudeArgs", () => {
     expect(args[args.indexOf("--resume") + 1]).toBe("c-1");
   });
 
+  it("mode (plan) auto-aprova em headless (senão pendura) — sem --permission-mode plan", () => {
+    // --permission-mode plan trava em headless esperando aprovação do plano; usamos skip-permissions
+    // e o read-only do plan no claude fica por prompt+sandbox (o read-only duro é do codex).
+    const args = buildClaudeArgs({ prompt: "map", mode: "plan" });
+    expect(args).toContain("--dangerously-skip-permissions");
+    expect(args).not.toContain("--permission-mode");
+  });
+
+  it("não auto-aprova sem force nem mode (evita pendurar só quando não há intenção de rodar)", () => {
+    expect(buildClaudeArgs({ prompt: "x" })).not.toContain("--dangerously-skip-permissions");
+  });
+
   it("é selecionado pelo dispatcher buildArgs", () => {
     const opts = { prompt: "hi", model: "opus" };
     expect(buildArgs("claude", opts)).toEqual(buildClaudeArgs(opts));
