@@ -26,12 +26,12 @@ export const CLAUDE_BIN = process.env.CURSOR_BRIDGE_CLAUDE_BIN ?? "claude";
 export const DEFAULT_MODEL = process.env.CURSOR_BRIDGE_MODEL ?? "composer-2.5-fast";
 
 /**
- * Modelo barato de leitura do `explore`/`read_slice`/`run_filtered`/`web_lookup`: Composer 2.5 Fast.
- * Mesmo racional do DEFAULT_MODEL — localizar/ler/filtrar pede o modelo mais barato e ágil, não `auto`.
- * Override via CURSOR_BRIDGE_EXPLORE_MODEL. Só se aplica quando o chamador não passa `model`.
- * (A migração destes tools para codex+luna é feita num commit dedicado.)
+ * Modelo barato de leitura do `explore`/`read_slice`/`run_filtered`/`web_lookup`: GPT-5.6 Luna via
+ * codex (keyless, pela assinatura Codex), rodando read-only (`-s read-only`). Substitui o composer do
+ * cursor cancelado — localizar/ler/filtrar pede o modelo mais barato e ágil. Override via
+ * CURSOR_BRIDGE_EXPLORE_MODEL. Só se aplica quando o chamador não passa `model`.
  */
-export const EXPLORE_MODEL = process.env.CURSOR_BRIDGE_EXPLORE_MODEL ?? "composer-2.5-fast";
+export const EXPLORE_MODEL = process.env.CURSOR_BRIDGE_EXPLORE_MODEL ?? "gpt-5.6-luna";
 
 /**
  * Modelo codex que dispara o image_gen built-in (gpt-image-2 faz o trabalho pesado; effort baixo basta).
@@ -221,8 +221,10 @@ export interface RunOpts {
   model?: string;
   effort?: string;
   resume?: string;
-  /** read-only mode para discovery/analyze: "plan" | "ask". */
+  /** read-only mode para discovery/analyze: "plan" | "ask". No codex vira `-s read-only`. */
   mode?: "plan" | "ask";
+  /** Habilita a busca web da engine (codex: `-c tools.web_search=true`). Usado por web_lookup. */
+  web?: boolean;
   /** Auto-aprova as tools deste run (--force), independente do env global. web_lookup precisa. */
   force?: boolean;
   cwd?: string;
@@ -291,7 +293,12 @@ export function buildCodexArgs(opts: RunOpts): string[] {
   // --ignore-user-config: NÃO carrega ~/.codex/config.toml (que traz MCP servers externos — o codex
   // pendurava tentando conectá-los até timeout, subindo N processos). --ignore-rules: idem para .rules.
   // Auth continua via CODEX_HOME. Isso complementa o sandbox (defense-in-depth).
-  const flags = ["--json", "--ignore-user-config", "--ignore-rules", "--dangerously-bypass-approvals-and-sandbox"];
+  const flags = ["--json", "--ignore-user-config", "--ignore-rules"];
+  // read-only (explore/read_slice/web_lookup) → sandbox read-only do codex + sem pedir aprovação
+  // (senão pendura em headless). Sem mode (delegate/generate_image) → bypass total (full access).
+  if (opts.mode) flags.push("-s", "read-only", "-c", 'approval_policy="never"');
+  else flags.push("--dangerously-bypass-approvals-and-sandbox");
+  if (opts.web) flags.push("-c", "tools.web_search=true"); // busca web (web_lookup)
   if (opts.model) flags.push("-m", opts.model);
   if (opts.effort) flags.push("-c", `model_reasoning_effort="${opts.effort}"`);
   // persona aditiva do codex: developer_instructions (developer-role), TOML-encoded. NÃO usamos

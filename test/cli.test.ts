@@ -186,6 +186,24 @@ describe("buildCodexArgs", () => {
     expect(args.at(-1)).toBe("fix it"); // prompt é posicional no fim
   });
 
+  it("read-only (mode) usa -s read-only + approval_policy never, sem bypass total", () => {
+    const args = buildCodexArgs({ prompt: "read", model: "gpt-5.6-luna", mode: "ask" });
+    expect(args[args.indexOf("-s") + 1]).toBe("read-only");
+    expect(args).toContain('approval_policy="never"');
+    expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
+  it("sem mode usa o bypass total (delegate/generate_image podem escrever)", () => {
+    const args = buildCodexArgs({ prompt: "do", model: "gpt-5.6-sol" });
+    expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(args).not.toContain("read-only");
+  });
+
+  it("web:true liga a busca web do codex (web_lookup)", () => {
+    const args = buildCodexArgs({ prompt: "search", mode: "ask", web: true });
+    expect(args).toContain("tools.web_search=true");
+  });
+
   it("usa o subcomando resume com o id quando há resume", () => {
     // resume do codex é subcomando: `codex exec resume [OPTIONS] <id> <prompt>`. buildCodexArgs
     // ignorava opts.resume → follow_up começava sessão nova em vez de continuar.

@@ -115,7 +115,8 @@ server.registerTool(
   },
   async ({ question, files, breadth, cwd, model, effort }) => {
     const { prompt, mode } = explorePrompt(question, files, breadth);
-    return format("explore", await runCursor({ prompt, cwd, model: model ?? EXPLORE_MODEL, effort, mode }));
+    // codex read-only (mode) com o modelo barato de leitura (luna). O worker localiza/mapeia sem editar.
+    return format("explore", await runCursor({ prompt, cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode }));
   },
 );
 
@@ -131,7 +132,7 @@ server.registerTool(
     },
   },
   async ({ files, want, cwd, model, effort }) =>
-    format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, model, effort, mode: "ask" })),
+    format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask" })),
 );
 
 server.registerTool(
@@ -146,10 +147,9 @@ server.registerTool(
     },
   },
   async ({ command, want, cwd, model, effort }) =>
-    // force: em headless o comando shell fica esperando aprovação que nunca chega e é rejeitado
-    // pelo ambiente ("O comando foi rejeitado pelo ambiente"); --force auto-aprova. Rodar o
-    // comando É o propósito do tool, então sempre auto-aprovamos (mesmo trade-off do web_lookup).
-    format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, model, effort, force: true })),
+    // codex sem mode → bypass total: rodar o comando (que pode escrever) É o propósito do tool.
+    // force mantém a paridade quando o fallback é cursor. O worker filtra o output por relevância.
+    format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, force: true })),
 );
 
 server.registerTool(
@@ -160,9 +160,9 @@ server.registerTool(
     inputSchema: { query: z.string().describe("What to look up on the web."), ...routing },
   },
   async ({ query, cwd, model, effort }) =>
-    // force: em headless a web search fica esperando aprovação que nunca chega e leva timeout;
-    // --force auto-aprova a tool, e mode:'ask' mantém o filesystem read-only.
-    format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, model, effort, mode: "ask", force: true })),
+    // codex read-only (mode:'ask' → filesystem intocado) + web:true liga a busca web do codex
+    // (-c tools.web_search=true). approval_policy=never evita pendurar em headless.
+    format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask", web: true })),
 );
 
 server.registerTool(
