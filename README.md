@@ -68,6 +68,15 @@ claude mcp add cursor-bridge -s user -- node /abs/path/to/cursor-mcp-bridge/dist
 }
 ```
 
+**Permissions (Claude Code):** `claude mcp add` registers the server but does **not** grant
+tool permission — without an allowlist every bridge call prompts for approval. After
+registering, add either `"mcp__cursor-bridge__*"` (full; also auto-approves mutating tools
+`delegate`/`build`/`run_filtered`/`follow_up`) or a read-only subset
+(`explore`/`read_slice`/`web_lookup`/`plan`/`bridge_stats`) under
+`permissions.allow` in `settings.json`. Full options and trade-offs:
+[INSTALL.md §3](INSTALL.md#3-allowlist-the-bridge-tools-claude-code). Cursor/Codex/other hosts
+have their own approval settings — consult the host.
+
 ## Configuration (env)
 
 | Var | Default | Meaning |
