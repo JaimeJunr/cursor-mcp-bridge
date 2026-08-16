@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
-  generateImagePrompt, generateImageGrokPrompt, planPrompt, buildPrompt,
+  generateImagePrompt, generateImageGrokPrompt, planPrompt, buildPrompt, fanOutArbiterPrompt,
 } from "../src/prompts.js";
 
 describe("planPrompt", () => {
@@ -110,6 +110,35 @@ describe("generateImagePrompt", () => {
     expect(p).toMatch(/edit.*attached|attached image/i);
     expect(p).toMatch(/keep everything|not explicitly mentioned/i);
     expect(p).toMatch(/make the sky purple/i);
+  });
+});
+
+describe("fanOutArbiterPrompt", () => {
+  it("embeds each worker's engine, level, session_id, and text", () => {
+    const p = fanOutArbiterPrompt([
+      { engine: "codex", level: 1, sessionId: "abc", text: "the bug is in auth.ts:42" },
+      { engine: "grok", level: 2, sessionId: "def", text: "the bug is in auth.ts:42" },
+    ]);
+    expect(p).toContain("codex");
+    expect(p).toContain("grok");
+    expect(p).toContain("abc");
+    expect(p).toContain("def");
+    expect(p).toContain("auth.ts:42");
+  });
+
+  it("asks for a compact consensus/disagreement digest, not a rehash", () => {
+    const p = fanOutArbiterPrompt([{ engine: "codex", level: 1, text: "x" }]);
+    expect(p).toMatch(/agree/i);
+    expect(p).toMatch(/diverg|disagree/i);
+    expect(p).toMatch(/compact|concise|terse/i);
+  });
+
+  it("marks failed workers distinctly", () => {
+    const p = fanOutArbiterPrompt([
+      { engine: "codex", level: 1, text: "ok result" },
+      { engine: "grok", level: 2, text: "timed out", error: true },
+    ]);
+    expect(p).toMatch(/fail/i);
   });
 });
 
