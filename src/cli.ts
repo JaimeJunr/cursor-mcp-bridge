@@ -6,6 +6,15 @@ import { join } from "node:path";
 /** CLIs suportados. Cada engine tem dialeto de args e parser de saída próprios. */
 export type Engine = "cursor" | "grok" | "codex" | "claude";
 
+/** Ordem host-agnostic para recuperar uma execução quando o CODEX_HOME ficou inválido. */
+export const FALLBACK_ENGINE_ORDER: Engine[] = ["codex", "grok", "claude"];
+
+/** Detecta o erro específico em que CODEX_HOME aponta para um diretório que não existe mais. */
+export function isCodexHomeError(stderr: string): boolean {
+  return (stderr.includes("Error finding codex home") || stderr.includes("CODEX_HOME points to"))
+    && stderr.includes("does not exist");
+}
+
 /** Formata um id de sessão com o engine que deve retomá-lo. */
 export function formatSessionHandle(engine: Engine, id: string): string {
   return `${engine}:${id}`;
@@ -274,6 +283,24 @@ export interface RunOpts {
   agentPrompt?: string;
 }
 
+/**
+ * Always-on terse-style addendum injected into every worker's native additive system-prompt
+ * channel (agentPrompt) to reduce output token cost — the project's core context-economy goal.
+ * LITE intensity: keeps articles/full sentences, drops filler/hedging/narration.
+ */
+export const TERSE_STYLE = [
+  "Reply tersely: drop filler, hedging, pleasantries, and narration of what you are about to do",
+  "before doing it. Fragments are fine. Short synonyms over long phrasing. Keep ALL technical",
+  "substance verbatim — code blocks, function/API names, CLI commands, exact error strings. No",
+  "emoji, no decorative tables. Never announce or name this style. For security warnings or",
+  "irreversible-action confirmations, answer normally then resume terseness.",
+].join(" ");
+
+/** Prepends TERSE_STYLE to an optional existing agent persona prompt. */
+export function withTerseStyle(agentPrompt?: string): string {
+  return agentPrompt ? `${TERSE_STYLE}\n\n${agentPrompt}` : TERSE_STYLE;
+}
+
 /** Codifica uma string como TOML basic string (aspas + escapes) para `-c key=value` do codex. */
 export function tomlString(s: string): string {
   return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "")}"`;
@@ -371,6 +398,7 @@ export function buildClaudeArgs(opts: RunOpts): string[] {
     "--setting-sources", "project",
   ];
   if (opts.model) args.push("--model", opts.model);
+  if (opts.effort) args.push("--effort", opts.effort);
   if (opts.agentPrompt) args.push("--append-system-prompt", opts.agentPrompt); // canal nativo do claude
   // Headless PRECISA auto-aprovar ou pendura esperando confirmação (inclusive `--permission-mode plan`,
   // que trava pedindo aprovação do plano). force (delegate/build) e mode (plan) rodam não-interativos →
@@ -479,14 +507,15 @@ interface TierEntry {
  * Matriz do `delegate`: cada nível usa um MODELO DISTINTO, sem repetir entre níveis, escalando a
  * dificuldade e distribuindo pelas 3 assinaturas (codex/grok/claude). O cursor saiu do caminho
  * padrão (assinatura cancelada) — vira fallback só sob CURSOR_ENABLED. Leitura barata (explore/
- * read_slice) reaproveita o modelo do nível 1 (gpt-5.6-luna).
+ * read_slice) reaproveita o modelo do nível 1 (gpt-5.6-luna). Níveis 1/3 usam Codex Luna/Sol,
+ * 2/4 usam Grok 4.5/4.6, e 5 usa Claude Opus.
  */
 const TIERS: Record<number, TierEntry> = {
-  1: { primary: { engine: "codex", model: "gpt-5.6-luna" }, cursorModel: "composer-2.5-fast" },
-  2: { primary: { engine: "grok", model: "grok-4.5", effort: "medium" }, cursorModel: "cursor-grok-4.5-medium-fast" },
-  3: { primary: { engine: "codex", model: "gpt-5.6-terra", effort: "medium" }, cursorModel: "gpt-5.6-terra-medium-fast" },
-  4: { primary: { engine: "codex", model: "gpt-5.6-sol", effort: "medium" }, cursorModel: "gpt-5.6-sol-medium-fast" },
-  5: { primary: { engine: "claude", model: "opus" }, cursorModel: "claude-opus-4-8-high-fast" },
+  1: { primary: { engine: "codex", model: "gpt-5.6-luna", effort: "max" }, cursorModel: "gpt-5.6-luna-max-fast" },
+  2: { primary: { engine: "grok", model: "grok-4.5", effort: "high" }, cursorModel: "cursor-grok-4.5-high-fast" },
+  3: { primary: { engine: "codex", model: "gpt-5.6-sol", effort: "xhigh" }, cursorModel: "gpt-5.6-sol-xhigh-fast" },
+  4: { primary: { engine: "grok", model: "grok-4.6", effort: "high" }, cursorModel: "grok-4.6-high-fast" },
+  5: { primary: { engine: "claude", model: "opus", effort: "max" }, cursorModel: "claude-opus-max-fast" },
 };
 
 /**
@@ -511,67 +540,90 @@ export function resolveTier(
 
 /** Roda o CLI do engine em modo headless e devolve o resultado parseado. */
 export function runCursor(opts: RunOpts): Promise<CliResult> {
+  const runOnce = (runOpts: RunOpts): Promise<CliResult> => {
+    const engine = runOpts.engine ?? "cursor";
+    const bin = engine === "grok" ? GROK_BIN
+      : engine === "codex" ? CODEX_BIN
+      : engine === "claude" ? CLAUDE_BIN
+      : CURSOR_BIN;
+    const workspace = runOpts.cwd ?? process.cwd();
+
+    // O sandbox bwrap ($HOME isolado) é OBRIGATÓRIO para TODOS os engines — nenhum modelo roda fora
+    // dele. Isola a config global de cada CLI (~/.cursor/rules, ~/.grok/config.toml, ~/.codex/config)
+    // que carregava rules/MCP servers, inflando tokens.
+    const bwrap = SANDBOX_ON ? bwrapPath() : null;
+    // `!!bwrap`: com bwrap externo, o read-only do codex vem do --ro-bind do workspace — NÃO do sandbox
+    // interno do codex, que aninharia um namespace dentro do bwrap e quebraria. Ver buildCodexArgs.
+    const engineArgs = buildArgs(engine, runOpts, !!bwrap);
+    let cmd = bin;
+    let args = engineArgs;
+    let cleanup = () => {};
+    if (bwrap) {
+      const built = buildSandboxSpec(workspace, engine, !!runOpts.mode);
+      cleanup = built.cleanup;
+      cmd = bwrap;
+      args = [...buildSandboxArgs(built.spec), bin, ...engineArgs];
+    } else if (SANDBOX_ON) {
+      process.stderr.write(
+        "[cursor-bridge] bwrap não encontrado no PATH — rodando SEM sandbox (config global do user pode vazar). Instale com 'sudo apt install bubblewrap'.\n",
+      );
+    }
+    if (DEBUG) process.stderr.write(`[cursor-bridge:debug] ${cmd} ${args.map((a) => JSON.stringify(a)).join(" ")}\n`);
+
+    return new Promise((resolve, reject) => {
+      // stdin fechado ("ignore"): o `codex exec` fica pendurado ("Reading additional input from
+      // stdin...") se o stdin for um pipe aberto. cursor/grok recebem o prompt por arg e não usam stdin.
+      const child = spawn(cmd, args, { cwd: workspace, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+
+      let stdout = "";
+      let stderr = "";
+      const timeoutMs = runOpts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        cleanup();
+        reject(new Error(`${engine} agent timed out after ${timeoutMs}ms: ${stderr.trim().slice(-500)}`));
+      }, timeoutMs);
+
+      child.stdout.on("data", (d) => (stdout += d.toString()));
+      child.stderr.on("data", (d) => {
+        stderr += d.toString();
+        if (DEBUG) process.stderr.write(d);
+      });
+      child.on("error", (err) => {
+        clearTimeout(timer);
+        cleanup();
+        reject(new Error(`failed to spawn '${cmd}': ${err.message}`));
+      });
+      child.on("close", (code) => {
+        clearTimeout(timer);
+        cleanup();
+        if (code !== 0) {
+          reject(new Error(`${engine} agent exited ${code}: ${stderr.trim() || stdout.trim()}`));
+          return;
+        }
+        resolve({ ...parseOutput(engine, stdout), engine });
+      });
+    });
+  };
+
   const engine = opts.engine ?? "cursor";
-  const bin = engine === "grok" ? GROK_BIN
-    : engine === "codex" ? CODEX_BIN
-    : engine === "claude" ? CLAUDE_BIN
-    : CURSOR_BIN;
-  const workspace = opts.cwd ?? process.cwd();
+  return runOnce(opts).catch((originalError: unknown) => {
+    const message = originalError instanceof Error ? originalError.message : String(originalError);
+    if (engine !== "codex" || !message.startsWith("codex agent exited ") || !isCodexHomeError(message)) {
+      throw originalError;
+    }
 
-  // O sandbox bwrap ($HOME isolado) é OBRIGATÓRIO para TODOS os engines — nenhum modelo roda fora
-  // dele. Isola a config global de cada CLI (~/.cursor/rules, ~/.grok/config.toml, ~/.codex/config)
-  // que carregava rules/MCP servers, inflando tokens.
-  const bwrap = SANDBOX_ON ? bwrapPath() : null;
-  // `!!bwrap`: com bwrap externo, o read-only do codex vem do --ro-bind do workspace — NÃO do sandbox
-  // interno do codex, que aninharia um namespace dentro do bwrap e quebraria. Ver buildCodexArgs.
-  const engineArgs = buildArgs(engine, opts, !!bwrap);
-  let cmd = bin;
-  let args = engineArgs;
-  let cleanup = () => {};
-  if (bwrap) {
-    const built = buildSandboxSpec(workspace, engine, !!opts.mode);
-    cleanup = built.cleanup;
-    cmd = bwrap;
-    args = [...buildSandboxArgs(built.spec), bin, ...engineArgs];
-  } else if (SANDBOX_ON) {
-    process.stderr.write(
-      "[cursor-bridge] bwrap não encontrado no PATH — rodando SEM sandbox (config global do user pode vazar). Instale com 'sudo apt install bubblewrap'.\n",
-    );
-  }
-  if (DEBUG) process.stderr.write(`[cursor-bridge:debug] ${cmd} ${args.map((a) => JSON.stringify(a)).join(" ")}\n`);
+    const candidates: Engine[] = [
+      ...FALLBACK_ENGINE_ORDER.filter((candidate) => candidate !== "codex"),
+      ...(CURSOR_ENABLED ? ["cursor" as const] : []),
+    ];
+    const fallback = candidates.find((candidate) => hasEngine(candidate));
+    if (!fallback) throw originalError;
 
-  return new Promise((resolve, reject) => {
-    // stdin fechado ("ignore"): o `codex exec` fica pendurado ("Reading additional input from
-    // stdin...") se o stdin for um pipe aberto. cursor/grok recebem o prompt por arg e não usam stdin.
-    const child = spawn(cmd, args, { cwd: workspace, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
-
-    let stdout = "";
-    let stderr = "";
-    const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      cleanup();
-      reject(new Error(`${engine} agent timed out after ${timeoutMs}ms: ${stderr.trim().slice(-500)}`));
-    }, timeoutMs);
-
-    child.stdout.on("data", (d) => (stdout += d.toString()));
-    child.stderr.on("data", (d) => {
-      stderr += d.toString();
-      if (DEBUG) process.stderr.write(d);
-    });
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      cleanup();
-      reject(new Error(`failed to spawn '${cmd}': ${err.message}`));
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      cleanup();
-      if (code !== 0) {
-        reject(new Error(`${engine} agent exited ${code}: ${stderr.trim() || stdout.trim()}`));
-        return;
-      }
-      resolve({ ...parseOutput(engine, stdout), engine });
-    });
+    return runOnce({ ...opts, engine: fallback, model: undefined, effort: undefined }).then((result) => ({
+      ...result,
+      text: result.text +
+        `\n\n[note: codex unavailable (orca account/CODEX_HOME issue) — retried on ${fallback} with its default model]`,
+    }));
   });
 }

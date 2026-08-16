@@ -116,13 +116,14 @@ describe("sessionStartContext — preload injetado no início da sessão", () =>
     expect(text).toMatch(/grunt|commits\b/i);
   });
 
-  it("enquadra delegate como executor E juiz (level 4-5 = Sol), Task só pra subagent especializado", () => {
+  it("enquadra delegate como executor E juiz (levels 3 and 5 = Sol/Opus), Task só pra subagent especializado", () => {
     const text = sessionStartContext();
     expect(text).toMatch(/delegate\(prompt, level\)/);
     expect(text).toMatch(/DEFAULT/);
-    // delegate cobre julgamento também, via o tier alto (GPT-5.6 Sol)
+    // delegate cobre julgamento também, via os tiers altos (GPT-5.6 Sol e Claude Opus)
     expect(text).toMatch(/judgment/i);
-    expect(text).toMatch(/4-5|Sol/);
+    expect(text).toMatch(/levels 3 and 5/i);
+    expect(text).toMatch(/Sol xhigh.*Opus max/i);
     // Task fica só pra subagent com toolset próprio, não pra julgamento genérico
     expect(text).toMatch(/specialized|toolset/i);
   });
@@ -196,7 +197,7 @@ describe("subagentStartContext — contexto injetado no subagente", () => {
   it("agent_type Explore inclui o reforço específico", () => {
     const text = subagentStartContext("Explore");
     expect(text).toMatch(/Explore run|you are an explore/i);
-    expect(text).toMatch(/composer/i);
+    expect(text).toMatch(/Codex Luna/i);
   });
 
   it("tipos diferentes de Explore não recebem o reforço específico", () => {

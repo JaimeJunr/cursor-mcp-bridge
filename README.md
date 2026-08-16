@@ -14,25 +14,25 @@ The server exposes ten tools:
 
 | Tool | Purpose |
 |------|---------|
-| `delegate` | Run a task with full **read/edit/shell** access in `cwd`. Required `level`: 1=GPT-5.6 Luna (codex), 2=Grok 4.5 medium (grok), 3=GPT-5.6 Terra medium (codex), 4=GPT-5.6 Sol medium (codex), 5=Opus (claude). Optionally accepts an `agent` persona by name or inline `{prompt}`. |
+| `delegate` | Run a task with full **read/edit/shell** access in `cwd`. Required `level`: 1=GPT-5.6 Luna max (codex), 2=Grok 4.5 high (grok), 3=GPT-5.6 Sol xhigh (codex), 4=Grok 4.6 high (grok), 5=Opus max (claude). Optionally accepts an `agent` persona by name or inline `{prompt}`. |
 | `explore` | Read-only exploration on Codex with `gpt-5.6-luna`. `question` alone → broad fan-out search returning `file:line` refs; `question`+`files` → answer about those files; neither → general project map. `breadth: "thorough"` sweeps wider. Locates, does not review. |
 | `read_slice` | Surgical read-only read: returns ONLY the code relevant to `want` (exact lines with `file:line`) from the given `files` — the full file never enters your context. Use instead of reading large files whole. |
 | `run_filtered` | Run a shell `command` through Codex/Luna with full access and get back ONLY the lines relevant to `want` — semantic filtering of huge build/test/log output. |
 | `web_lookup` | Web/docs lookup through Codex/Luna with real web search enabled and a read-only filesystem. |
 | `generate_image` | Generate or edit an image through Codex's built-in image tool and save it inside `cwd`. |
-| `plan` | Phase 1: read the codebase and return an implementation plan without editing. Defaults to level 4 (Codex Sol, hard read-only); level 5 Claude is read-only by prompt only. |
-| `build` | Phase 2: implement an approved plan with full access. Defaults to level 1 (Codex Luna) and optionally accepts an `agent` persona. |
+| `plan` | Phase 1: read the codebase and return an implementation plan without editing. Defaults to level 3 (Codex Sol xhigh, hard read-only); level 5 Opus max is read-only by prompt only. |
+| `build` | Phase 2: implement an approved plan with full access. Defaults to level 1 (Codex Luna max) and optionally accepts an `agent` persona. |
 | `follow_up` | Continue a prior session by `session_id`. |
 | `bridge_stats` | Report calls and chars returned to context per tool (needs `CURSOR_BRIDGE_LOG`). |
 
 Worker tools accept `cwd`, `model`, and `effort` where applicable. `delegate` requires a **level**
-(1-5); `plan` and `build` default to levels 4 and 1 respectively. Explicit `model`/`effort`
+(1-5); `plan` and `build` default to levels 3 and 1 respectively. Explicit `model`/`effort`
 values override the selected tier.
 
 ## Requirements
 
 - Node ≥ 18
-- Codex installed and authenticated for read tools and levels 1/3/4; Grok for level 2; Claude Code
+- Codex installed and authenticated for read tools and levels 1/3; Grok for levels 2/4; Claude Code
   for level 5.
 - Optional Cursor fallback: install `cursor-agent` and set `CURSOR_BRIDGE_ENABLE_CURSOR=1`.
 
@@ -98,7 +98,7 @@ have their own approval settings — consult the host.
 
 > **Security:** `delegate`, `build`, and `run_filtered` have full access and auto-approve their
 > work. `explore`, `read_slice`, and `web_lookup` use Codex's read-only sandbox. `plan` is hard
-> read-only on Codex; level 5 Claude enforces read-only through its prompt. Named agents are resolved
+> read-only on Codex; level 5 Opus max enforces read-only through its prompt. Named agents are resolved
 > on the host, reject path traversal, and are injected without mounting agent directories.
 
 ## Make the agent actually use it
@@ -244,8 +244,8 @@ own tokens on self-contained tasks. State this in `CLAUDE.md` so the agent route
 
 ```
 You are the ORCHESTRATOR. delegate(prompt, level) is the DEFAULT for BOTH execution AND judgment.
-`level` picks a distinct tier: 1=GPT-5.6 Luna (codex), 2=Grok 4.5 medium, 3=GPT-5.6 Terra medium
-(codex), 4=GPT-5.6 Sol medium (codex), 5=Opus (claude). The worker has full read/edit/shell access
+`level` picks a distinct tier: 1=GPT-5.6 Luna max (codex), 2=Grok 4.5 high (grok), 3=GPT-5.6 Sol
+xhigh (codex), 4=Grok 4.6 high (grok), 5=Opus max (claude). The worker has full read/edit/shell access
 in cwd when you delegate. The constant win is context economy: the worker's raw output never enters
 your context. Delegate it, then review the result; edit inline only for a quick one-off you're
 already positioned for. Use plan(task) then build(plan) when you want a strong read-only planning
