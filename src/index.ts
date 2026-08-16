@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   runCursor, EXPLORE_MODEL, IMAGE_MODEL, DEFAULT_TIMEOUT_MS, budgetNote,
-  formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, type CliResult,
+  formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, withTerseStyle, type CliResult,
 } from "./cli.js";
 import { resolveAgent } from "./agents.js";
 import {
@@ -60,7 +60,7 @@ server.registerTool(
   {
     _meta: { "anthropic/alwaysLoad": true },
     description:
-      "Delegate a task to a headless coding-agent CLI — the cheap/fast worker with full tool access (read, edit, shell) in cwd. As the orchestrator, offload grunt-work here instead of spending your own expensive tokens: commits, opening/updating PRs, writing tickets/comments, small mechanical or 2-line edits, running a build/test and fixing it, and routine implementation. The `level` (1-5) picks a DISTINCT model by task difficulty, spread across the codex/grok/claude subscriptions: 1=GPT-5.6 Luna (codex, cheapest), 2=Grok 4.5 (grok), 3=GPT-5.6 Terra (codex), 4=GPT-5.6 Sol (codex), 5=Claude Opus (claude). Pick the lowest level that can do the job. Give a complete, self-contained instruction — the worker does not see your context.",
+      "Delegate a task to a headless coding-agent CLI — the cheap/fast worker with full tool access (read, edit, shell) in cwd. As the orchestrator, offload grunt-work here instead of spending your own expensive tokens: commits, opening/updating PRs, writing tickets/comments, small mechanical or 2-line edits, running a build/test and fixing it, and routine implementation. The `level` (1-5) picks a DISTINCT model by task difficulty, spread across the codex/grok/claude subscriptions: 1=GPT-5.6 Luna max (codex, cheapest), 2=Grok 4.5 high (grok), 3=GPT-5.6 Sol xhigh (codex), 4=Grok 4.6 high (grok), 5=Opus max (claude). Pick the lowest level that can do the job. Give a complete, self-contained instruction — the worker does not see your context.",
     inputSchema: {
       prompt: z.string().describe("The complete task prompt for the worker agent."),
       level: z
@@ -68,7 +68,7 @@ server.registerTool(
         .int()
         .min(1)
         .max(5)
-        .describe("Task difficulty 1-5, each a distinct model: 1=GPT-5.6 Luna (codex), 2=Grok 4.5 (grok), 3=GPT-5.6 Terra (codex), 4=GPT-5.6 Sol (codex), 5=Claude Opus (claude). Use the lowest level that fits."),
+        .describe("Task difficulty 1-5, each a distinct model: 1=GPT-5.6 Luna max (codex), 2=Grok 4.5 high (grok), 3=GPT-5.6 Sol xhigh (codex), 4=Grok 4.6 high (grok), 5=Opus max (claude). Use the lowest level that fits."),
       agent: agentSchema.optional().describe(agentDescription),
       timeout_ms: z
         .number()
@@ -95,7 +95,7 @@ server.registerTool(
         engine: tier.engine,
         model: model ?? tier.model,
         effort: effort ?? tier.effort,
-        agentPrompt: resolved?.prompt,
+        agentPrompt: withTerseStyle(resolved?.prompt),
         force: true,
         timeoutMs: timeout_ms,
       }),
@@ -108,7 +108,7 @@ server.registerTool(
   {
     _meta: { "anthropic/alwaysLoad": true },
     description:
-      "Read-only codebase exploration, the cheap Explore. Prefer this over spawning the Explore subagent for locating/mapping code: it runs on Cursor's composer model (cheap/fast) and keeps file dumps out of your context — you get back only the conclusion plus concrete file:line references. Three modes: (a) `question` alone → broad fan-out search across the repo (follows naming conventions, checks multiple locations) returning file:line refs; (b) `question`+`files` → scoped answer about those files; (c) neither → a general project map. It LOCATES, it does not review/audit — use a Task subagent for judgment.",
+      "Read-only codebase exploration, the cheap Explore. Prefer this over spawning the Explore subagent for locating/mapping code: it runs on Codex Luna (cheap/fast) and keeps file dumps out of your context — you get back only the conclusion plus concrete file:line references. Three modes: (a) `question` alone → broad fan-out search across the repo (follows naming conventions, checks multiple locations) returning file:line refs; (b) `question`+`files` → scoped answer about those files; (c) neither → a general project map. It LOCATES, it does not review/audit — use a Task subagent for judgment.",
     inputSchema: {
       question: z
         .string()
@@ -128,7 +128,7 @@ server.registerTool(
   async ({ question, files, breadth, cwd, model, effort }) => {
     const { prompt, mode } = explorePrompt(question, files, breadth);
     // codex read-only (mode) com o modelo barato de leitura (luna). O worker localiza/mapeia sem editar.
-    return format("explore", await runCursor({ prompt, cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode }));
+    return format("explore", await runCursor({ prompt, cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode, agentPrompt: withTerseStyle() }));
   },
 );
 
@@ -145,7 +145,7 @@ server.registerTool(
     },
   },
   async ({ files, want, cwd, model, effort }) =>
-    format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask" })),
+    format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask", agentPrompt: withTerseStyle() })),
 );
 
 server.registerTool(
@@ -163,7 +163,7 @@ server.registerTool(
   async ({ command, want, cwd, model, effort }) =>
     // codex sem mode → bypass total: rodar o comando (que pode escrever) É o propósito do tool.
     // force mantém a paridade quando o fallback é cursor. O worker filtra o output por relevância.
-    format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, force: true })),
+    format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, force: true, agentPrompt: withTerseStyle() })),
 );
 
 server.registerTool(
@@ -177,14 +177,14 @@ server.registerTool(
   async ({ query, cwd, model, effort }) =>
     // codex read-only (mode:'ask' → filesystem intocado) + web:true liga a busca web do codex
     // (-c tools.web_search=true). approval_policy=never evita pendurar em headless.
-    format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask", web: true })),
+    format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask", web: true, agentPrompt: withTerseStyle() })),
 );
 
 server.registerTool(
   "plan",
   {
     description:
-      "Phase 1 of plan→build: a STRONG model reads the codebase and returns an implementation PLAN — read-only, it does NOT edit anything. Review/approve the plan, then hand it to `build` (which can run a cheaper executor). Defaults to level 4 (GPT-5.6 Sol on codex) — strong AND hard read-only (-s read-only). Level 5 (Claude Opus) is also strong but read-only-by-prompt only. Returns the plan + a session_id.",
+      "Phase 1 of plan→build: a STRONG model reads the codebase and returns an implementation PLAN — read-only, it does NOT edit anything. Review/approve the plan, then hand it to `build` (which can run a cheaper executor). Defaults to level 3 (GPT-5.6 Sol xhigh on codex) — strong AND hard read-only (-s read-only). Level 5 (Opus max on claude) is also strong but read-only-by-prompt only. Returns the plan + a session_id.",
     inputSchema: {
       task: z.string().describe("What to plan — the feature or fix to design."),
       level: z
@@ -192,15 +192,15 @@ server.registerTool(
         .int()
         .min(1)
         .max(5)
-        .optional()
-        .describe("Model tier for planning (1-5). Default 4 (GPT-5.6 Sol, codex, hard read-only). Planning benefits from a strong tier."),
+        .default(3)
+        .describe("Model tier for planning (1-5). Default 3 (GPT-5.6 Sol xhigh, codex, hard read-only). Planning benefits from a strong tier; level 5 is Opus max."),
       ...routing,
     },
   },
   // mode:'plan' → read-only por engine (codex -s read-only é o mais forte; cursor --mode plan). O
   // planejador lê a codebase e propõe sem editar; o prompt reforça "não editar".
   async ({ task, level, cwd, model, effort }) => {
-    const tier = resolveTier(level ?? 4);
+    const tier = resolveTier(level);
     return format(
       "plan",
       await runCursor({
@@ -210,6 +210,7 @@ server.registerTool(
         model: model ?? tier.model,
         effort: effort ?? tier.effort,
         mode: "plan",
+        agentPrompt: withTerseStyle(),
       }),
     );
   },
@@ -219,7 +220,7 @@ server.registerTool(
   "build",
   {
     description:
-      "Phase 2 of plan→build: an executor model IMPLEMENTS an approved plan (typically the output of `plan`), with full tool access (edits + tests). Defaults to level 1 (cheapest) — the thinking is already done, so a cheap executor usually suffices. Optionally run as an `agent`. Returns a summary + session_id.",
+      "Phase 2 of plan→build: an executor model IMPLEMENTS an approved plan (typically the output of `plan`), with full tool access (edits + tests). Defaults to level 1 (GPT-5.6 Luna max on codex, cheapest) — the thinking is already done, so a cheap executor usually suffices. Optionally run as an `agent`. Returns a summary + session_id.",
     inputSchema: {
       plan: z.string().describe("The approved plan to implement (typically the `plan` tool output)."),
       level: z
@@ -228,7 +229,7 @@ server.registerTool(
         .min(1)
         .max(5)
         .optional()
-        .describe("Executor tier (1-5). Default 1 (cheapest). Raise only for harder implementations."),
+        .describe("Executor tier (1-5). Default 1 (GPT-5.6 Luna max, codex, cheapest). Raise only for harder implementations."),
       agent: agentSchema.optional().describe(agentDescription),
       timeout_ms: z
         .number()
@@ -250,7 +251,7 @@ server.registerTool(
         engine: tier.engine,
         model: model ?? tier.model,
         effort: effort ?? tier.effort,
-        agentPrompt: resolved?.prompt,
+        agentPrompt: withTerseStyle(resolved?.prompt),
         force: true,
         timeoutMs: timeout_ms,
       }),
@@ -334,7 +335,7 @@ server.registerTool(
     const { engine, id } = parseSessionHandle(session_id);
     return format(
       "follow_up",
-      await runCursor({ prompt: question, engine, resume: id, mode, cwd, model, effort, force: true }),
+      await runCursor({ prompt: question, engine, resume: id, mode, cwd, model, effort, force: true, agentPrompt: withTerseStyle() }),
     );
   },
 );

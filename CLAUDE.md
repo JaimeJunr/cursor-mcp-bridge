@@ -83,9 +83,9 @@ tier path; it is available as a fallback only when `CURSOR_BRIDGE_ENABLE_CURSOR=
   headless Claude otherwise hangs waiting for approval.
 
 `delegate` takes a required `level` (1-5) → `resolveTier` maps difficulty to (engine, model, effort),
-using a distinct model at every level across the three active subscriptions: 1=GPT-5.6 Luna
-(codex), 2=Grok 4.5 medium (grok), 3=GPT-5.6 Terra medium (codex), 4=GPT-5.6 Sol medium (codex),
-5=Opus (claude). `resolveTier(level, has, cursorEnabled)` uses the preferred CLI when present. If it
+using a distinct model at every level across the three active subscriptions: 1=GPT-5.6 Luna max
+(codex), 2=Grok 4.5 high (grok), 3=GPT-5.6 Sol xhigh (codex), 4=Grok 4.6 high (grok),
+5=Opus max (claude). `resolveTier(level, has, cursorEnabled)` uses the preferred CLI when present. If it
 is missing, it falls back to the equivalent Cursor model only when `cursorEnabled` is true;
 otherwise it throws a clear error naming the missing CLI.
 - `prompts.ts` — pure prompt builders (`readSlicePrompt`, `runFilteredPrompt`, `explorePrompt`,
@@ -136,7 +136,7 @@ points, all in `cli.ts`:
 
 - **Read-only modes are load-bearing for safety.** `explore`, `read_slice`, and `web_lookup` run on
   codex with `RunOpts.mode`, which `buildCodexArgs` converts to `-s read-only -c
-  approval_policy="never"`. `plan` also passes a mode: its default level 4 gets hard Codex
+  approval_policy="never"`. `plan` also passes a mode: its default level 3 gets hard Codex
   read-only; level 5 Claude is read-only by prompt only, and force OR mode must still add
   `--dangerously-skip-permissions` so Claude headless does not hang. `run_filtered`, `delegate`, and
   `build` omit mode and get full/bypass access because they execute commands or edit. Do not
@@ -151,10 +151,10 @@ points, all in `cli.ts`:
   `-c tools.web_search=true` for real web search; `run_filtered` deliberately omits mode and uses
   bypass so it can run the requested command. `explore` takes `breadth` (`medium`|`thorough`) and
   LOCATES, never reviews.
-- **`plan` and `build` are a two-phase boundary.** `plan(task, level=4)` uses a strong planner and
-  returns an implementation plan without editing; default Codex Sol is hard read-only, while level
-  5 Claude relies on the prompt for read-only behavior. `build(plan, level=1, agent?)` implements
-  the approved plan with full access, defaulting to the cheap Luna executor. Keep `planPrompt` and
+- **`plan` and `build` are a two-phase boundary.** `plan(task, level=3)` uses a strong planner and
+  returns an implementation plan without editing; default Codex Sol xhigh is hard read-only, while
+  level 5 Opus max relies on the prompt for read-only behavior. `build(plan, level=1, agent?)` implements
+  the approved plan with full access, defaulting to the cheap Luna max executor. Keep `planPrompt` and
   `buildPrompt` aligned with that contract.
 - **Agent personas are additive and cross-engine.** `delegate` and `build` accept a named or inline
   agent. Resolve it on the host in `agents.ts`, then pass its body via `RunOpts.agentPrompt`: Claude

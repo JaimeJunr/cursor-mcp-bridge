@@ -5,8 +5,41 @@ import { join } from "node:path";
 import {
   buildCursorArgs, buildGrokArgs, buildCodexArgs, buildClaudeArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
   budgetNote, formatSessionHandle, parseSessionHandle, parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
+  isCodexHomeError, withTerseStyle, TERSE_STYLE, FALLBACK_ENGINE_ORDER,
   type SandboxSpec, type Engine,
 } from "../src/cli.js";
+
+describe("codex CODEX_HOME fallback helpers", () => {
+  it("detects the missing CODEX_HOME directory error", () => {
+    expect(isCodexHomeError("Error finding codex home: CODEX_HOME points to /old/orca and does not exist")).toBe(true);
+    expect(isCodexHomeError("CODEX_HOME points to '/gone' which does not exist")).toBe(true);
+  });
+
+  it("does not match generic or unrelated errors", () => {
+    expect(isCodexHomeError("codex agent exited 1: authentication failed")).toBe(false);
+    expect(isCodexHomeError("Error finding codex home: permission denied")).toBe(false);
+    expect(isCodexHomeError("some directory does not exist")).toBe(false);
+  });
+
+  it("keeps the host-agnostic fallback order stable", () => {
+    expect(FALLBACK_ENGINE_ORDER).toEqual(["codex", "grok", "claude"]);
+  });
+
+  // runCursor's spawn boundary is not mocked in this suite; retry wiring is integration-verified.
+});
+
+describe("withTerseStyle", () => {
+  it("returns the non-empty terse addendum without a persona", () => {
+    expect(withTerseStyle()).toBe(TERSE_STYLE);
+    expect(withTerseStyle().length).toBeGreaterThan(0);
+  });
+
+  it("prepends the terse addendum to an existing persona", () => {
+    expect(withTerseStyle("You are a strict reviewer.")).toBe(
+      `${TERSE_STYLE}\n\nYou are a strict reviewer.`,
+    );
+  });
+});
 
 describe("session handles", () => {
   it("formata o engine junto com o id", () => {
@@ -338,11 +371,11 @@ describe("resolveTier", () => {
   const noCodex: (e: Engine) => boolean = (e) => e !== "codex";
 
   it("mapeia cada nível para a engine+modelo preferido (matriz mista 3 assinaturas)", () => {
-    expect(resolveTier(1, all)).toEqual({ engine: "codex", model: "gpt-5.6-luna" });
-    expect(resolveTier(2, all)).toEqual({ engine: "grok", model: "grok-4.5", effort: "medium" });
-    expect(resolveTier(3, all)).toEqual({ engine: "codex", model: "gpt-5.6-terra", effort: "medium" });
-    expect(resolveTier(4, all)).toEqual({ engine: "codex", model: "gpt-5.6-sol", effort: "medium" });
-    expect(resolveTier(5, all)).toEqual({ engine: "claude", model: "opus" });
+    expect(resolveTier(1, all)).toEqual({ engine: "codex", model: "gpt-5.6-luna", effort: "max" });
+    expect(resolveTier(2, all)).toEqual({ engine: "grok", model: "grok-4.5", effort: "high" });
+    expect(resolveTier(3, all)).toEqual({ engine: "codex", model: "gpt-5.6-sol", effort: "xhigh" });
+    expect(resolveTier(4, all)).toEqual({ engine: "grok", model: "grok-4.6", effort: "high" });
+    expect(resolveTier(5, all)).toEqual({ engine: "claude", model: "opus", effort: "max" });
   });
 
   it("usa um modelo DISTINTO em cada nível (sem repetição)", () => {
@@ -351,8 +384,12 @@ describe("resolveTier", () => {
   });
 
   it("cai para o cursor-agent equivalente só quando CURSOR habilitado e a engine preferida falta", () => {
-    expect(resolveTier(1, noCodex, true)).toEqual({ engine: "cursor", model: "composer-2.5-fast" });
-    expect(resolveTier(3, noCodex, true)).toEqual({ engine: "cursor", model: "gpt-5.6-terra-medium-fast" });
+    expect(resolveTier(1, noCodex, true)).toEqual({ engine: "cursor", model: "gpt-5.6-luna-max-fast" });
+    expect(resolveTier(3, noCodex, true)).toEqual({ engine: "cursor", model: "gpt-5.6-sol-xhigh-fast" });
+    expect(resolveTier(5, (e) => e !== "claude", true)).toEqual({
+      engine: "cursor",
+      model: "claude-opus-max-fast",
+    });
   });
 
   it("lança erro claro quando a engine preferida falta e o cursor está desabilitado (default)", () => {
@@ -379,6 +416,12 @@ describe("buildClaudeArgs", () => {
 
   it("auto-aprova com --dangerously-skip-permissions quando force (delegate)", () => {
     expect(buildClaudeArgs({ prompt: "x", force: true })).toContain("--dangerously-skip-permissions");
+  });
+
+  it("inclui --effort quando informado e omite quando ausente", () => {
+    const withEffort = buildClaudeArgs({ prompt: "x", model: "opus", effort: "max" });
+    expect(withEffort[withEffort.indexOf("--effort") + 1]).toBe("max");
+    expect(buildClaudeArgs({ prompt: "x", model: "opus" })).not.toContain("--effort");
   });
 
   it("não auto-aprova por padrão", () => {
@@ -472,7 +515,7 @@ describe("parseCodexJsonl", () => {
 
   it("captura o thread_id do evento thread.started como sessionId", () => {
     // o codex emite o id da sessão como `thread_id` no `thread.started`, não como `session_id`.
-    // sem isso o follow_up de um delegate 4-5 (codex) perdia a sessão.
+    // sem isso o follow_up de um delegate codex perdia a sessão.
     const raw = [
       JSON.stringify({ type: "thread.started", thread_id: "019f7049-22af-79a2" }),
       JSON.stringify({ type: "item.completed", item: { id: "1", type: "agent_message", text: "PONG" } }),
