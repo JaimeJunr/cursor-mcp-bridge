@@ -6,13 +6,20 @@ import { join } from "node:path";
 /** CLIs suportados. Cada engine tem dialeto de args e parser de saída próprios. */
 export type Engine = "cursor" | "grok" | "codex" | "claude";
 
-/** Ordem host-agnostic para recuperar uma execução quando o CODEX_HOME ficou inválido. */
+/** Ordem host-agnostic para recuperar uma execução quando o ambiente do codex está quebrado. */
 export const FALLBACK_ENGINE_ORDER: Engine[] = ["codex", "grok", "claude"];
 
-/** Detecta o erro específico em que CODEX_HOME aponta para um diretório que não existe mais. */
-export function isCodexHomeError(stderr: string): boolean {
-  return (stderr.includes("Error finding codex home") || stderr.includes("CODEX_HOME points to"))
-    && stderr.includes("does not exist");
+/**
+ * Detecta falhas de ambiente do codex que nenhum retry no mesmo engine resolve: CODEX_HOME
+ * apontando para um diretório de conta que sumiu (gerenciado por apps externos como o orca), ou o
+ * app-server interno falhando ao inicializar por filesystem read-only (ex.: conta montada RO).
+ * Distinto de erros de auth/permissão do próprio codex, que não devem disparar fallback de engine.
+ */
+export function isCodexEnvError(stderr: string): boolean {
+  if ((stderr.includes("Error finding codex home") || stderr.includes("CODEX_HOME points to"))
+    && stderr.includes("does not exist")) return true;
+  return stderr.includes("failed to initialize in-process app-server client")
+    || stderr.includes("Read-only file system");
 }
 
 /** Formata um id de sessão com o engine que deve retomá-lo. */
@@ -243,7 +250,14 @@ export function buildSandboxSpec(
     systemRo: SANDBOX_SYSTEM_RO.filter((p) => existsSync(p)),
     // base (toolchains + cursor auth) + os subpaths RO específicos do engine (auth/libs do CLI)
     homeRo: [...SANDBOX_HOME_RO, ...SANDBOX_ENGINE_RO[engine]].map(abs).filter((p) => existsSync(p)),
-    homeRw: [...SANDBOX_HOME_RW, ...SANDBOX_ENGINE_RW[engine]].map(abs).filter((p) => existsSync(p)),
+    homeRw: [
+      ...[...SANDBOX_HOME_RW, ...SANDBOX_ENGINE_RW[engine]].map(abs),
+      // Apps externos (ex.: orca) roteiam múltiplas contas do codex setando CODEX_HOME pra fora do
+      // ~/.codex bindado acima. Sem isso, o sandbox esconde a conta ativa (isoHome cobre $HOME) e o
+      // codex falha ao inicializar (CODEX_HOME inexistente, ou "Read-only file system" — ver
+      // isCodexEnvError). Só o engine codex precisa enxergá-lo, e só se o path existir de fato.
+      ...(engine === "codex" && process.env.CODEX_HOME ? [process.env.CODEX_HOME] : []),
+    ].filter((p) => existsSync(p)),
     // só os que existem e não são o próprio workspace (esse já é o último bind)
     extraBinds: SANDBOX_EXTRA.filter((p) => p !== workspace && existsSync(p)),
     extraEnv: SANDBOX_PROXY_ENV
@@ -643,7 +657,7 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
   const engine = opts.engine ?? "cursor";
   return runOnce(opts).catch((originalError: unknown) => {
     const message = originalError instanceof Error ? originalError.message : String(originalError);
-    if (engine !== "codex" || !message.startsWith("codex agent exited ") || !isCodexHomeError(message)) {
+    if (engine !== "codex" || !message.startsWith("codex agent exited ") || !isCodexEnvError(message)) {
       throw originalError;
     }
 
@@ -657,7 +671,7 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
     return runOnce({ ...opts, engine: fallback, model: undefined, effort: undefined }).then((result) => ({
       ...result,
       text: result.text +
-        `\n\n[note: codex unavailable (orca account/CODEX_HOME issue) — retried on ${fallback} with its default model]`,
+        `\n\n[note: codex unavailable (environment issue — missing CODEX_HOME or read-only app-server init) — retried on ${fallback} with its default model]`,
     }));
   });
 }

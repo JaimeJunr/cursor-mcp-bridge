@@ -5,21 +5,29 @@ import { join } from "node:path";
 import {
   buildCursorArgs, buildGrokArgs, buildCodexArgs, buildClaudeArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
   budgetNote, formatSessionHandle, parseSessionHandle, parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
-  isCodexHomeError, withTerseStyle, TERSE_STYLE, FALLBACK_ENGINE_ORDER, isDefaultTierEngine, raceFirstSuccess,
+  isCodexEnvError, withTerseStyle, TERSE_STYLE, FALLBACK_ENGINE_ORDER, isDefaultTierEngine, raceFirstSuccess,
   type SandboxSpec, type Engine,
 } from "../src/cli.js";
 import { computeEngineHealth } from "../src/usage.js";
 
-describe("codex CODEX_HOME fallback helpers", () => {
+describe("codex environment fallback helpers", () => {
   it("detects the missing CODEX_HOME directory error", () => {
-    expect(isCodexHomeError("Error finding codex home: CODEX_HOME points to /old/orca and does not exist")).toBe(true);
-    expect(isCodexHomeError("CODEX_HOME points to '/gone' which does not exist")).toBe(true);
+    expect(isCodexEnvError("Error finding codex home: CODEX_HOME points to /old/orca and does not exist")).toBe(true);
+    expect(isCodexEnvError("CODEX_HOME points to '/gone' which does not exist")).toBe(true);
+  });
+
+  it("detects a read-only filesystem app-server init failure", () => {
+    expect(isCodexEnvError(
+      "WARNING: proceeding, even though we could not create PATH aliases: Read-only file system (os error 30)\n" +
+      "Reading additional input from stdin...\n" +
+      "Error: failed to initialize in-process app-server client: Read-only file system (os error 30)",
+    )).toBe(true);
   });
 
   it("does not match generic or unrelated errors", () => {
-    expect(isCodexHomeError("codex agent exited 1: authentication failed")).toBe(false);
-    expect(isCodexHomeError("Error finding codex home: permission denied")).toBe(false);
-    expect(isCodexHomeError("some directory does not exist")).toBe(false);
+    expect(isCodexEnvError("codex agent exited 1: authentication failed")).toBe(false);
+    expect(isCodexEnvError("Error finding codex home: permission denied")).toBe(false);
+    expect(isCodexEnvError("some directory does not exist")).toBe(false);
   });
 
   it("keeps the host-agnostic fallback order stable", () => {
@@ -263,6 +271,42 @@ describe("buildSandboxArgs", () => {
       if (oldHome === undefined) delete process.env.HOME;
       else process.env.HOME = oldHome;
       rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("monta CODEX_HOME (roteado por apps externos como o orca) como bind RW quando existe", () => {
+    const oldHome = process.env.HOME;
+    const oldCodexHome = process.env.CODEX_HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), "cbx-test-home-"));
+    const orcaAccountHome = mkdtempSync(join(tmpdir(), "cbx-test-orca-account-"));
+    process.env.HOME = fakeHome;
+    process.env.CODEX_HOME = orcaAccountHome;
+    const codex = buildSandboxSpec("/repo", "codex");
+    const grok = buildSandboxSpec("/repo", "grok");
+    try {
+      expect(codex.spec.homeRw).toContain(orcaAccountHome);
+      // engine != codex não precisa enxergar CODEX_HOME
+      expect(grok.spec.homeRw).not.toContain(orcaAccountHome);
+    } finally {
+      codex.cleanup();
+      grok.cleanup();
+      if (oldHome === undefined) delete process.env.HOME; else process.env.HOME = oldHome;
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
+      rmSync(fakeHome, { recursive: true, force: true });
+      rmSync(orcaAccountHome, { recursive: true, force: true });
+    }
+  });
+
+  it("ignora CODEX_HOME quando o diretório não existe (evita bind quebrado)", () => {
+    const oldCodexHome = process.env.CODEX_HOME;
+    const gone = join(tmpdir(), "cbx-test-codex-home-that-does-not-exist");
+    process.env.CODEX_HOME = gone;
+    const codex = buildSandboxSpec("/repo", "codex");
+    try {
+      expect(codex.spec.homeRw).not.toContain(gone);
+    } finally {
+      codex.cleanup();
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = oldCodexHome;
     }
   });
 });

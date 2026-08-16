@@ -116,6 +116,23 @@ points, all in `cli.ts`:
 - **codex config is neutralized by flags, not just the sandbox:** `buildCodexArgs` always passes
   `--ignore-user-config`/`--ignore-rules` so `~/.codex/config.toml` (with its external MCP servers,
   which spawned runaway `mcp-server` procs) is never loaded; auth still resolves via `CODEX_HOME`.
+- **`CODEX_HOME` is bound dynamically when it points outside `~/.codex`.** External account managers
+  (e.g. the orca desktop app) route multiple codex logins by exporting `CODEX_HOME` to a path like
+  `~/.config/orca/codex-accounts/<uuid>/home` per pane/workspace, inherited by whatever spawns the
+  bridge's MCP server. The static `SANDBOX_ENGINE_RW` list only knows the conventional `~/.codex`, so
+  without this the sandbox's `isoHome` overlay hides the real account entirely — codex fails to init
+  (missing dir, or "Read-only file system" trying to write into an invisible path). `buildSandboxSpec`
+  adds `process.env.CODEX_HOME` to `homeRw` for the codex engine whenever it's set and the directory
+  exists. Even so, treat any codex environment failure as possibly host-specific and recoverable: see
+  `isCodexEnvError`/`FALLBACK_ENGINE_ORDER` below.
+- **`isCodexEnvError(stderr)` + `FALLBACK_ENGINE_ORDER` retry codex failures on another engine.**
+  `runCursor` catches a codex exit whose stderr matches `isCodexEnvError` (CODEX_HOME pointing at a
+  deleted directory, or the in-process app-server failing to init on a read-only path) and retries the
+  *same prompt* once on the next available engine in `FALLBACK_ENGINE_ORDER` (`grok` → `claude`, plus
+  `cursor` under `CURSOR_ENABLED`), dropping the codex-specific `model`/`effort` and appending a
+  `[note: codex unavailable ...]` suffix to the result. This is host-agnostic by design — it isn't an
+  orca-specific patch, since any host that mismanages `CODEX_HOME` hits the same failure. Non-env
+  codex errors (auth, rate limit, bad prompt) are NOT retried — they propagate as-is.
 - **`buildSandboxArgs(spec)` is pure and unit-tested** (like `buildCursorArgs`). Bind order is
   load-bearing: `isoHome` mounts the empty `$HOME` **before** the HOME-subpath overlays (auth/
   toolchain), and the `workspace` bind is **last** so it's never shadowed. `buildSandboxSpec(workspace,
