@@ -5,9 +5,10 @@ import { join } from "node:path";
 import {
   buildCursorArgs, buildGrokArgs, buildCodexArgs, buildClaudeArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
   budgetNote, formatSessionHandle, parseSessionHandle, parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
-  isCodexHomeError, withTerseStyle, TERSE_STYLE, FALLBACK_ENGINE_ORDER,
+  isCodexHomeError, withTerseStyle, TERSE_STYLE, FALLBACK_ENGINE_ORDER, isDefaultTierEngine, raceFirstSuccess,
   type SandboxSpec, type Engine,
 } from "../src/cli.js";
+import { computeEngineHealth } from "../src/usage.js";
 
 describe("codex CODEX_HOME fallback helpers", () => {
   it("detects the missing CODEX_HOME directory error", () => {
@@ -26,6 +27,26 @@ describe("codex CODEX_HOME fallback helpers", () => {
   });
 
   // runCursor's spawn boundary is not mocked in this suite; retry wiring is integration-verified.
+});
+
+describe("raceFirstSuccess", () => {
+  it("resolves with the first promise to fulfill, ignoring slower ones", async () => {
+    const slow = new Promise<string>((resolve) => setTimeout(() => resolve("slow"), 20));
+    const fast = new Promise<string>((resolve) => setTimeout(() => resolve("fast"), 1));
+    await expect(raceFirstSuccess([slow, fast])).resolves.toBe("fast");
+  });
+
+  it("skips a rejected promise and resolves with a later success", async () => {
+    const failing = Promise.reject(new Error("engine down"));
+    const ok = new Promise<string>((resolve) => setTimeout(() => resolve("ok"), 5));
+    await expect(raceFirstSuccess([failing, ok])).resolves.toBe("ok");
+  });
+
+  it("rejects only when every promise rejects", async () => {
+    const a = Promise.reject(new Error("a failed"));
+    const b = Promise.reject(new Error("b failed"));
+    await expect(raceFirstSuccess([a, b])).rejects.toThrow(/all/i);
+  });
 });
 
 describe("withTerseStyle", () => {
@@ -400,6 +421,64 @@ describe("resolveTier", () => {
   it("rejeita nível fora de 1-5", () => {
     expect(() => resolveTier(0, all)).toThrow(/expected integer 1-5/);
     expect(() => resolveTier(6, all)).toThrow(/expected integer 1-5/);
+  });
+
+  it("ignora health quando omitido (comportamento existente inalterado)", () => {
+    expect(resolveTier(1, all)).toEqual({ engine: "codex", model: "gpt-5.6-luna", effort: "max" });
+    expect(resolveTier(1, all, true)).toEqual({ engine: "codex", model: "gpt-5.6-luna", effort: "max" });
+  });
+
+  it("trata health vazio (log sem registros relevantes) igual a omitir health", () => {
+    const empty = computeEngineHealth([], Date.now());
+    expect(empty).toEqual({});
+    expect(resolveTier(1, all, true, empty)).toEqual(resolveTier(1, all, true));
+    expect(resolveTier(2, all, false, empty)).toEqual(resolveTier(2, all, false));
+    expect(resolveTier(5, all, true, {})).toEqual(resolveTier(5, all, true));
+  });
+
+  it("cai pro cursor quando a engine preferida está instalada mas com health baixo", () => {
+    expect(resolveTier(1, all, true, { codex: 0.1 })).toEqual({
+      engine: "cursor",
+      model: "gpt-5.6-luna-max-fast",
+    });
+  });
+
+  it("mantém a engine preferida quando health está OK", () => {
+    expect(resolveTier(1, all, true, { codex: 0.9 })).toEqual({
+      engine: "codex",
+      model: "gpt-5.6-luna",
+      effort: "max",
+    });
+  });
+
+  it("lança erro quando toda engine candidata do tier (preferida + cursor) está unhealthy", () => {
+    expect(() => resolveTier(1, all, true, { codex: 0.1, cursor: 0.1 })).toThrow(/needs the 'codex' CLI/);
+    expect(() => resolveTier(1, all, true, { codex: 0.1, cursor: 0.1 })).toThrow(/unhealthy/);
+  });
+
+  it("lança erro quando a engine preferida está unhealthy e o cursor está desabilitado", () => {
+    expect(() => resolveTier(1, all, false, { codex: 0.1 })).toThrow(/needs the 'codex' CLI/);
+  });
+});
+
+describe("isDefaultTierEngine (tier-integrity receipt)", () => {
+  it("is true when the resolved engine matches the tier's preferred engine", () => {
+    expect(isDefaultTierEngine(1, "codex")).toBe(true);
+    expect(isDefaultTierEngine(2, "grok")).toBe(true);
+    expect(isDefaultTierEngine(3, "codex")).toBe(true);
+    expect(isDefaultTierEngine(4, "grok")).toBe(true);
+    expect(isDefaultTierEngine(5, "claude")).toBe(true);
+  });
+
+  it("is false when the resolved engine is a fallback (e.g. cursor)", () => {
+    expect(isDefaultTierEngine(1, "cursor")).toBe(false);
+    expect(isDefaultTierEngine(3, "grok")).toBe(false);
+    expect(isDefaultTierEngine(5, "cursor")).toBe(false);
+  });
+
+  it("is false for an invalid level (no tier entry to match)", () => {
+    expect(isDefaultTierEngine(0, "codex")).toBe(false);
+    expect(isDefaultTierEngine(6, "codex")).toBe(false);
   });
 });
 

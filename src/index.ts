@@ -4,14 +4,21 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   runCursor, EXPLORE_MODEL, IMAGE_MODEL, DEFAULT_TIMEOUT_MS, budgetNote,
-  formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, withTerseStyle, type CliResult,
+  formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, isDefaultTierEngine, withTerseStyle,
+  raceFirstSuccess, CURSOR_ENABLED,
+  type CliResult, type Engine,
 } from "./cli.js";
 import { resolveAgent } from "./agents.js";
 import {
   readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
-  generateImagePrompt, generateImageGrokPrompt, planPrompt, buildPrompt,
+  generateImagePrompt, generateImageGrokPrompt, planPrompt, buildPrompt, fanOutArbiterPrompt,
+  type FanOutWorkerOutput,
 } from "./prompts.js";
-import { logUsage, readUsage, aggregate } from "./usage.js";
+import {
+  logUsage, readUsage, aggregate, computeEngineHealth, classifyOutcome,
+  type TierReceipt, type UsageRun,
+} from "./usage.js";
+import { scrubSecrets } from "./scrub.js";
 
 const server = new McpServer(
   { name: "cursor-mcp-bridge", version: "0.5.0" },
@@ -42,17 +49,62 @@ const agentSchema = z.union([
 const agentDescription =
   "Run the worker as a specialized agent/persona. A name (e.g. 'pit:issue-investigator' or 'code-reviewer') is resolved from .claude/agents (project + home) and ~/.claude/plugins — its system prompt is injected via each engine's native channel (claude --append-system-prompt, grok --rules, codex developer_instructions). Or pass an inline { prompt } to skip file lookup. Works on every level/engine, not just claude.";
 
-/** Formata o resultado do Cursor e loga os chars devolvidos ao contexto (custo real). */
-function format(tool: string, res: CliResult): { content: { type: "text"; text: string }[] } {
+/**
+ * Formata o resultado do Cursor: passa o texto pelo egress scrubber (scrubSecrets) antes do footer
+ * de session_id, loga os chars devolvidos ao contexto (custo real) e — quando algo foi redigido —
+ * loga também um evento "blocked_exfil". `tier` (opcional) carrega o tier-integrity receipt de
+ * quem chamou resolveTier (delegate/plan/build); tools sem tier (explore, read_slice, ...) omitem.
+ */
+function format(
+  tool: string,
+  res: CliResult,
+  tier?: TierReceipt,
+  run?: UsageRun,
+): { content: { type: "text"; text: string }[] } {
   const sessionHandle = res.engine && res.sessionId
     ? formatSessionHandle(res.engine, res.sessionId)
     : res.sessionId;
   const footer = res.sessionId
     ? `\n\n---\nsession_id: ${sessionHandle} (pass to follow_up to continue this session)`
     : "";
-  const text = res.text + footer;
-  logUsage(tool, text.length);
+  const { text: scrubbed, redacted } = scrubSecrets(res.text);
+  const text = scrubbed + footer;
+  logUsage(tool, text.length, tier, run);
+  if (redacted) logUsage("blocked_exfil", text.length);
   return { content: [{ type: "text", text }] };
+}
+
+/** Saúde atual das engines a partir do log. I/O + Date.now() ficam aqui — resolveTier permanece pura. */
+function currentEngineHealth(): Record<string, number> {
+  return computeEngineHealth(readUsage(), Date.now());
+}
+
+/**
+ * Roda o worker e anexa engine/outcome/durationMs no log — inclusive em falha/timeout, senão o
+ * computeEngineHealth nunca vê os negativos. Rejeita de novo após logar.
+ */
+async function formatRun(
+  tool: string,
+  engine: Engine,
+  work: () => Promise<CliResult>,
+  receipt: TierReceipt,
+): Promise<{ content: { type: "text"; text: string }[] }> {
+  const started = Date.now();
+  try {
+    const res = await work();
+    return format(tool, res, receipt, {
+      engine: res.engine ?? engine,
+      outcome: "success",
+      durationMs: Date.now() - started,
+    });
+  } catch (err) {
+    logUsage(tool, 0, receipt, {
+      engine,
+      outcome: classifyOutcome(err),
+      durationMs: Date.now() - started,
+    });
+    throw err;
+  }
 }
 
 server.registerTool(
@@ -83,13 +135,14 @@ server.registerTool(
   // "trusted" do cursor-agent e todo shell é rejeitado sem --force; grok/codex auto-aprovam por args.
   // `model`/`effort` explícitos do chamador ainda sobrepõem o tier.
   async ({ prompt, level, agent, timeout_ms, cwd, model, effort }) => {
-    const tier = resolveTier(level);
+    const tier = resolveTier(level, hasEngine, CURSOR_ENABLED, currentEngineHealth());
     // Resolve o agent no host (fora do sandbox): a persona vira string injetada por engine. O `model`
     // do frontmatter é advisory — o `model` explícito e o do tier vencem.
     const resolved = agent ? resolveAgent(agent, cwd ?? process.cwd()) : undefined;
-    return format(
+    return formatRun(
       "delegate",
-      await runCursor({
+      tier.engine,
+      () => runCursor({
         prompt: prompt + budgetNote(timeout_ms ?? DEFAULT_TIMEOUT_MS),
         cwd,
         engine: tier.engine,
@@ -99,6 +152,7 @@ server.registerTool(
         force: true,
         timeoutMs: timeout_ms,
       }),
+      { requestedLevel: level, matchedRequest: isDefaultTierEngine(level, tier.engine) },
     );
   },
 );
@@ -200,10 +254,11 @@ server.registerTool(
   // mode:'plan' → read-only por engine (codex -s read-only é o mais forte; cursor --mode plan). O
   // planejador lê a codebase e propõe sem editar; o prompt reforça "não editar".
   async ({ task, level, cwd, model, effort }) => {
-    const tier = resolveTier(level);
-    return format(
+    const tier = resolveTier(level, hasEngine, CURSOR_ENABLED, currentEngineHealth());
+    return formatRun(
       "plan",
-      await runCursor({
+      tier.engine,
+      () => runCursor({
         prompt: planPrompt(task) + budgetNote(DEFAULT_TIMEOUT_MS),
         cwd,
         engine: tier.engine,
@@ -212,6 +267,7 @@ server.registerTool(
         mode: "plan",
         agentPrompt: withTerseStyle(),
       }),
+      { requestedLevel: level, matchedRequest: isDefaultTierEngine(level, tier.engine) },
     );
   },
 );
@@ -241,11 +297,13 @@ server.registerTool(
     },
   },
   async ({ plan, level, agent, timeout_ms, cwd, model, effort }) => {
-    const tier = resolveTier(level ?? 1);
+    const requestedLevel = level ?? 1;
+    const tier = resolveTier(requestedLevel, hasEngine, CURSOR_ENABLED, currentEngineHealth());
     const resolved = agent ? resolveAgent(agent, cwd ?? process.cwd()) : undefined;
-    return format(
+    return formatRun(
       "build",
-      await runCursor({
+      tier.engine,
+      () => runCursor({
         prompt: buildPrompt(plan) + budgetNote(timeout_ms ?? DEFAULT_TIMEOUT_MS),
         cwd,
         engine: tier.engine,
@@ -255,7 +313,59 @@ server.registerTool(
         force: true,
         timeoutMs: timeout_ms,
       }),
+      { requestedLevel, matchedRequest: isDefaultTierEngine(requestedLevel, tier.engine) },
     );
+  },
+);
+
+server.registerTool(
+  "fan_out",
+  {
+    description:
+      "Run the SAME prompt across N engines/tiers in parallel isolated sandboxes, for cross-checking a claim or catching a single worker's blind spot. Returns ONLY a compact digest, never the N raw transcripts — context economy on the caller side. mode:'race' (default) resolves on the first successful result and skips the slower ones. mode:'consensus' waits for every worker then runs one cheap arbiter call that compares all outputs and returns its consensus/disagreement digest plus each worker's session_id for follow_up.",
+    inputSchema: {
+      prompt: z.string().describe("The task prompt sent identically to every worker."),
+      levels: z
+        .array(z.number().int().min(1).max(5))
+        .min(2)
+        .describe("Which delegate tiers (1-5) to fan out to, one worker per entry. Repeat a level (e.g. [1,1,1]) to sample the same model N times instead of diversifying engines."),
+      mode: z
+        .enum(["race", "consensus"])
+        .default("race")
+        .describe("'race': return the first successful worker's result, skip the rest. 'consensus': wait for all, then return an arbiter digest + all session_ids."),
+      ...routing,
+    },
+  },
+  async ({ prompt, levels, mode, cwd }) => {
+    const tiers = levels.map((level) => ({ level, tier: resolveTier(level) }));
+    const runs = tiers.map(({ level, tier }) =>
+      runCursor({ prompt, cwd, engine: tier.engine, model: tier.model, effort: tier.effort, force: true })
+        .then((res) => ({ level, tier, res })),
+    );
+
+    if (mode === "race") {
+      const { res, level, tier } = await raceFirstSuccess(runs);
+      return format("fan_out", res, { requestedLevel: level, matchedRequest: isDefaultTierEngine(level, tier.engine) });
+    }
+
+    const settled = await Promise.allSettled(runs);
+    const outputs: FanOutWorkerOutput[] = settled.map((s, i) =>
+      s.status === "fulfilled"
+        ? { engine: s.value.tier.engine, level: s.value.level, sessionId: s.value.res.sessionId, text: s.value.res.text }
+        : { engine: tiers[i].tier.engine, level: tiers[i].level, text: String(s.reason), error: true },
+    );
+    const arbiter = await runCursor({
+      prompt: fanOutArbiterPrompt(outputs),
+      cwd,
+      engine: "codex",
+      model: EXPLORE_MODEL,
+      mode: "ask",
+      agentPrompt: withTerseStyle(),
+    });
+    const footer = outputs
+      .map((o) => `- ${o.engine} (level ${o.level})${o.sessionId ? `: ${formatSessionHandle(o.engine as Engine, o.sessionId)}` : o.error ? ": FAILED" : ": no session_id"}`)
+      .join("\n");
+    return format("fan_out", { ...arbiter, text: `${arbiter.text}\n\nWorker sessions (pass to follow_up):\n${footer}` });
   },
 );
 

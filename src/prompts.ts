@@ -137,6 +137,45 @@ export function buildPrompt(plan: string): string {
   ].join("\n");
 }
 
+/** Saída de um worker do `fan_out`, repassada ao arbiter para comparação. */
+export interface FanOutWorkerOutput {
+  engine: string;
+  level: number;
+  sessionId?: string;
+  text: string;
+  /** true quando o worker falhou/timeout — o texto vira a mensagem de erro. */
+  error?: boolean;
+}
+
+/**
+ * fan_out (modo "consensus"): pede a um engine barato que compare N outputs do MESMO prompt
+ * e devolva um digest compacto — nunca um reprocessamento integral de cada output (isso
+ * derrotaria a economia de contexto que o `fan_out` existe para dar).
+ */
+export function fanOutArbiterPrompt(outputs: FanOutWorkerOutput[]): string {
+  const sections = outputs
+    .map((o, i) => {
+      const tag = [`engine: ${o.engine}`, `level: ${o.level}`];
+      if (o.sessionId) tag.push(`session_id: ${o.sessionId}`);
+      if (o.error) tag.push("FAILED");
+      return `--- Worker ${i + 1} (${tag.join(", ")}) ---\n${o.text}`;
+    })
+    .join("\n\n");
+  return [
+    "Multiple worker agents were given the SAME task independently. Compare their outputs below and",
+    "produce a COMPACT consensus/disagreement digest — do NOT restate or rehash each output in full.",
+    "Structure your reply as:",
+    "1. Agreement summary — what all/most workers agree on.",
+    "2. Points of divergence — where workers disagree, citing WHICH worker (its engine + level, and",
+    "   session_id when present) holds which claim.",
+    "3. Recommendation — if workers diverge, which claim you'd trust most and why. Note any worker",
+    "   that FAILED and should be disregarded.",
+    "Be terse and concise: the digest is read instead of the raw outputs, so it must stay short.",
+    "",
+    sections,
+  ].join("\n");
+}
+
 /**
  * generate_image: instrui o codex a usar o image_gen built-in (gpt-image-2) para gerar ou editar
  * uma imagem e salvar no outPath dentro do cwd.

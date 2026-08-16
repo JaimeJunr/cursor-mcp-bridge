@@ -518,24 +518,58 @@ const TIERS: Record<number, TierEntry> = {
   5: { primary: { engine: "claude", model: "opus", effort: "max" }, cursorModel: "claude-opus-max-fast" },
 };
 
+/** Health mínimo (0-1) pra considerar uma engine viável num tier. Abaixo disso, trata como indisponível. */
+const HEALTH_THRESHOLD = 0.3;
+
 /**
- * Roteia o nível (1-5) para (engine, modelo, effort). Usa a engine preferida do nível se instalada.
- * Se faltar: cai para o cursor-agent SÓ quando CURSOR_ENABLED (assinatura reativada); senão lança
- * erro claro dizendo o que instalar. `has`/`cursorEnabled` são injetados para teste.
+ * Roteia o nível (1-5) para (engine, modelo, effort). Usa a engine preferida do nível se instalada
+ * E saudável (quando `health` é passado — ver computeEngineHealth em src/usage.ts). Se faltar ou
+ * estiver unhealthy: cai para o cursor-agent equivalente SÓ quando CURSOR_ENABLED E o próprio cursor
+ * está saudável; senão lança erro claro. `has`/`cursorEnabled`/`health` são injetados para teste.
+ * `health` omitido preserva o comportamento anterior (toda engine é tratada como saudável).
  */
 export function resolveTier(
   level: number,
   has: (e: Engine) => boolean = hasEngine,
   cursorEnabled: boolean = CURSOR_ENABLED,
+  health?: Record<string, number>,
 ): Tier {
   const entry = TIERS[level];
   if (!entry) throw new Error(`invalid delegate level: received ${level}, expected integer 1-5`);
-  if (has(entry.primary.engine)) return entry.primary;
-  if (cursorEnabled) return { engine: "cursor", model: entry.cursorModel };
+  const healthy = (e: Engine): boolean => health === undefined || (health[e] ?? 1) >= HEALTH_THRESHOLD;
+  if (has(entry.primary.engine) && healthy(entry.primary.engine)) return entry.primary;
+  if (cursorEnabled && healthy("cursor")) return { engine: "cursor", model: entry.cursorModel };
+  const reason = has(entry.primary.engine) ? "is unhealthy (recent failures/timeouts)" : "is not installed";
   throw new Error(
-    `delegate level ${level} needs the '${entry.primary.engine}' CLI, which is not installed. ` +
+    `delegate level ${level} needs the '${entry.primary.engine}' CLI, which ${reason}. ` +
     "Install it, pick another level, or set CURSOR_BRIDGE_ENABLE_CURSOR=1 to fall back to cursor-agent.",
   );
+}
+
+/**
+ * Tier-integrity receipt: true se `engine` é a engine PADRÃO (preferida) do nível — false quando
+ * resolveTier caiu no fallback (ex.: cursor) ou o nível é inválido. Usado pelo usage log para emitir
+ * o "matched_request" do trust layer (src/usage.ts), sem acoplar usage.ts à matriz TIERS.
+ */
+export function isDefaultTierEngine(level: number, engine: Engine): boolean {
+  return TIERS[level]?.primary.engine === engine;
+}
+
+/**
+ * Resolve com o primeiro sucesso da lista, ignorando rejeições (usadas pelo `fan_out` em modo
+ * "race" para não esperar os engines mais lentos). Só rejeita se TODAS as promises rejeitarem.
+ * Função pura e genérica — testável sem spawnar processo.
+ */
+export function raceFirstSuccess<T>(promises: Promise<T>[]): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let remaining = promises.length;
+    for (const p of promises) {
+      p.then(resolve).catch(() => {
+        remaining -= 1;
+        if (remaining === 0) reject(new Error("all promises rejected"));
+      });
+    }
+  });
 }
 
 /** Roda o CLI do engine em modo headless e devolve o resultado parseado. */
