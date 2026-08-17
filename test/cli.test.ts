@@ -6,6 +6,7 @@ import {
   buildCursorArgs, buildGrokArgs, buildCodexArgs, buildClaudeArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
   budgetNote, formatSessionHandle, parseSessionHandle, parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
   isCodexEnvError, withTerseStyle, TERSE_STYLE, FALLBACK_ENGINE_ORDER, isDefaultTierEngine, raceFirstSuccess,
+  fallbackOpts,
   type SandboxSpec, type Engine,
 } from "../src/cli.js";
 import { computeEngineHealth } from "../src/usage.js";
@@ -35,6 +36,36 @@ describe("codex environment fallback helpers", () => {
   });
 
   // runCursor's spawn boundary is not mocked in this suite; retry wiring is integration-verified.
+
+  describe("fallbackOpts", () => {
+    it("drops mode so the fallback engine's workspace is never mounted read-only", () => {
+      const opts = { prompt: "q", engine: "codex" as Engine, mode: "ask" as const, cwd: "/repo" };
+      expect(fallbackOpts(opts, "grok")).not.toHaveProperty("mode");
+    });
+
+    it("drops model/effort/resume/images along with mode", () => {
+      const opts = {
+        prompt: "q", engine: "codex" as Engine, model: "gpt-5.6-sol", effort: "high",
+        resume: "codex-session-id", images: ["/repo/a.png"], mode: "plan" as const,
+      };
+      const result = fallbackOpts(opts, "grok");
+      expect(result).not.toHaveProperty("model");
+      expect(result).not.toHaveProperty("effort");
+      expect(result).not.toHaveProperty("resume");
+      expect(result).not.toHaveProperty("images");
+    });
+
+    it("keeps cross-engine-safe fields and sets the new engine", () => {
+      const opts = {
+        prompt: "q", engine: "codex" as Engine, cwd: "/repo", timeoutMs: 5000,
+        force: true, web: true, agentPrompt: "be terse",
+      };
+      expect(fallbackOpts(opts, "claude")).toEqual({
+        prompt: "q", cwd: "/repo", timeoutMs: 5000, force: true, web: true,
+        agentPrompt: "be terse", engine: "claude",
+      });
+    });
+  });
 });
 
 describe("raceFirstSuccess", () => {
