@@ -586,6 +586,23 @@ export function raceFirstSuccess<T>(promises: Promise<T>[]): Promise<T> {
   });
 }
 
+/**
+ * Subconjunto de RunOpts seguro para retomar num OUTRO engine depois de uma falha de ambiente.
+ * ALLOWLIST deliberada (não blocklist): um campo só atravessa pro fallback se listado aqui, então
+ * uma opção nova ou esquecida em RunOpts nunca vaza por omissão. Campos excluídos e o porquê:
+ * - model/effort: escolha feita pro codex; o fallback usa o default do próprio engine.
+ * - mode: vira `--ro-bind` do workspace em buildSandboxSpec, mas só o codex tem `-s read-only`
+ *   pra honrar isso sem quebrar — grok guarda sessão indexada pelo cwd e falha ("Read-only file
+ *   system") tentando criar a sessão se o cwd virou somente-leitura. Foi exatamente este bug.
+ * - resume: id de sessão no formato/namespace do engine original; não existe no fallback.
+ * - images: hoje só generate_image usa (`-i`, exclusivo codex); grok/claude ignoram silenciosamente
+ *   o valor, o que dropa a imagem de entrada sem avisar — pior que falhar.
+ */
+export function fallbackOpts(opts: RunOpts, engine: Engine): RunOpts {
+  const { prompt, cwd, timeoutMs, force, web, agentPrompt } = opts;
+  return { prompt, cwd, timeoutMs, force, web, agentPrompt, engine };
+}
+
 /** Roda o CLI do engine em modo headless e devolve o resultado parseado. */
 export function runCursor(opts: RunOpts): Promise<CliResult> {
   const runOnce = (runOpts: RunOpts): Promise<CliResult> => {
@@ -668,7 +685,7 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
     const fallback = candidates.find((candidate) => hasEngine(candidate));
     if (!fallback) throw originalError;
 
-    return runOnce({ ...opts, engine: fallback, model: undefined, effort: undefined }).then((result) => ({
+    return runOnce(fallbackOpts(opts, fallback)).then((result) => ({
       ...result,
       text: result.text +
         `\n\n[note: codex unavailable (environment issue — missing CODEX_HOME or read-only app-server init) — retried on ${fallback} with its default model]`,
