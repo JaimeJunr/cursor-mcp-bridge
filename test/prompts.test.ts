@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
+  isFullFileRequest, readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
   generateImagePrompt, generateImageGrokPrompt, planPrompt, buildPrompt, fanOutArbiterPrompt,
 } from "../src/prompts.js";
 
@@ -37,6 +37,57 @@ describe("readSlicePrompt", () => {
     expect(p).toMatch(/file:line:\s*<.*code.*>/i);
     expect(p).toMatch(/never emit the .*prefix by itself/i);
     expect(p).toMatch(/\.ts:\d+:\s+\S+/); // exemplo tem prefixo seguido de código real
+  });
+});
+
+describe("isFullFileRequest", () => {
+  it("detects the reported full-file verbatim request", () => {
+    const want = "full content of the file, verbatim, especially control flow sections for INTAKE, SPEC, RED/GREEN, VERIFY, CLASSIFY, SHIP, CI-GATE and the loop between fix-implementer and fix-verifier on FAIL";
+    expect(isFullFileRequest(want)).toBe(true);
+  });
+
+  it.each(["the whole file", "entire content", "complete source"])(
+    "detects %s",
+    (want) => expect(isFullFileRequest(want)).toBe(true),
+  );
+
+  it.each([
+    "the login handler and its imports",
+    "the full name of the exported function",
+    "quote this line verbatim",
+  ])("does not block narrow request %s", (want) => {
+    expect(isFullFileRequest(want)).toBe(false);
+  });
+
+  it.each([
+    "the full text search query builder",
+    "where the full file path is computed",
+    "the complete source map generation function",
+    "the full content-type header validation",
+  ])("does not block qualified narrow request %s", (want) => {
+    expect(isFullFileRequest(want)).toBe(false);
+  });
+
+  it.each([
+    "content of the whole configuration file",
+    "the whole config file",
+    "give me the full-file dump",
+    "entire files, top to bottom",
+    "the file in full",
+    "all contents of the file",
+    "print every line of the file",
+  ])("detects natural full-file request %s", (want) => {
+    expect(isFullFileRequest(want)).toBe(true);
+  });
+
+  it("conservatively blocks an ambiguous full-file request narrowed afterward", () => {
+    expect(isFullFileRequest(
+      "the function that reads the entire file into memory - just its signature",
+    )).toBe(true);
+  });
+
+  it("treats verbatim plus a file mention as an independent full-file signal", () => {
+    expect(isFullFileRequest("copy the error message verbatim from the file")).toBe(true);
   });
 });
 

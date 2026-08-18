@@ -10,7 +10,7 @@ import {
 } from "./cli.js";
 import { resolveAgent } from "./agents.js";
 import {
-  readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
+  isFullFileRequest, readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
   generateImagePrompt, generateImageGrokPrompt, planPrompt, buildPrompt, fanOutArbiterPrompt,
   type FanOutWorkerOutput,
 } from "./prompts.js";
@@ -191,15 +191,27 @@ server.registerTool(
   {
     _meta: { "anthropic/alwaysLoad": true },
     description:
-      "Read-only surgical read: the Cursor agent reads the given file(s) and returns ONLY the code relevant to `want` (exact lines with file:line), never the whole file. Use instead of Read when you need a specific function/section from large files — the full file never enters your context.",
+      "Read-only surgical read: the Cursor agent reads the given file(s) and returns ONLY the code relevant to `want` (exact lines with file:line), never the whole file. Full-file/verbatim dump requests are refused by design and enforced before the worker is spawned. Use instead of Read when you need a specific function/section from large files — the full file never enters your context.",
     inputSchema: {
       files: z.array(z.string()).min(1).describe("File paths to read from (relative to cwd or absolute)."),
       want: z.string().describe("What to extract, e.g. 'the login handler and its imports'."),
       ...routing,
     },
   },
-  async ({ files, want, cwd, model, effort }) =>
-    format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask", agentPrompt: withTerseStyle() })),
+  async ({ files, want, cwd, model, effort }) => {
+    if (isFullFileRequest(want)) {
+      return format("read_slice_refused", {
+        text: [
+          "read_slice refuses full-file dumps by design.",
+          "The cost is paid twice: once by the worker reading the whole file, and again by the caller receiving the whole dump — exactly the waste read_slice exists to avoid.",
+          `Requested file(s): ${files.join(", ")}.`,
+          "If this was a narrow request misclassified by the heuristic, retry with `want` naming the specific symbol or section.",
+          "To locate or understand a specific part, use explore(question, files). Use native Read only when you are about to edit the file.",
+        ].join(" "),
+      });
+    }
+    return format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask", agentPrompt: withTerseStyle() }));
+  },
 );
 
 server.registerTool(
