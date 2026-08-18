@@ -6,7 +6,9 @@
 /**
  * read_slice: extrai só o trecho relevante de arquivo(s). O arquivo inteiro nunca
  * entra no contexto do chamador — só as linhas pedidas (que são código). Ataca a
- * leitura de arquivo inteiro.
+ * leitura de arquivo inteiro. Defesa em duas camadas: o handler em `index.ts` bloqueia
+ * deterministicamente pedidos integrais via `isFullFileRequest`; esta instrução textual
+ * continua como fallback para falsos negativos da heurística.
  * @example readSlicePrompt(["auth.ts"], "the login handler")
  */
 export function readSlicePrompt(files: string[], want: string): string {
@@ -24,6 +26,42 @@ export function readSlicePrompt(files: string[], want: string): string {
     `Files: ${files.join(", ")}`,
     `Target: ${want}`,
   ].join("\n");
+}
+
+const FULL_FILE_TARGET_WORDS = String.raw`(?:files?|contents?)`;
+const FULL_FILE_COMPLETENESS_WORDS = String.raw`(?:full|whole|entire|complete|all|every)`;
+const FULL_FILE_DISQUALIFYING_NOUNS = String.raw`(?:paths?|names?|size|types?|formats?|extensions?|handlers?|validation|builder|map|query|search|headers?)`;
+const UP_TO_THREE_INTERVENING_WORDS = String.raw`(?:[\s-]+[A-Za-z0-9_]+\b){0,3}`;
+
+const COMPLETENESS_BEFORE_FILE_TARGET_PATTERN = new RegExp(
+  String.raw`\b${FULL_FILE_COMPLETENESS_WORDS}\b${UP_TO_THREE_INTERVENING_WORDS}[\s-]+\b${FULL_FILE_TARGET_WORDS}\b(?![\s-]+${FULL_FILE_DISQUALIFYING_NOUNS}\b)`,
+  "i",
+);
+const FILE_TARGET_BEFORE_COMPLETENESS_PATTERN = new RegExp(
+  String.raw`\b${FULL_FILE_TARGET_WORDS}\b(?![\s-]+${FULL_FILE_DISQUALIFYING_NOUNS}\b)${UP_TO_THREE_INTERVENING_WORDS}[\s-]+\b${FULL_FILE_COMPLETENESS_WORDS}\b`,
+  "i",
+);
+const VERBATIM_PATTERN = /\bverbatim\b/i;
+const FILE_TARGET_MENTION_PATTERN = new RegExp(String.raw`\b${FULL_FILE_TARGET_WORDS}\b`, "i");
+// Preserva os pedidos legados "complete source"/"full text", sem bloquear source map/text search.
+const LEGACY_SOURCE_OR_TEXT_DUMP_PATTERN = new RegExp(
+  String.raw`\b(?:full|whole|entire|complete)\b[\s-]+\b(?:source|text)\b(?![\s-]+${FULL_FILE_DISQUALIFYING_NOUNS}\b)`,
+  "i",
+);
+
+/**
+ * Detecta pedidos de conteúdo integral/verbatim de um arquivo — o padrão que read_slice
+ * existe para evitar. Camada 1 de defesa (código, determinística); a instrução textual em
+ * readSlicePrompt continua como camada 2 (soft-guard pro LLM downstream), pra cobrir falsos
+ * negativos desta heurística.
+ */
+export function isFullFileRequest(want: string): boolean {
+  // Limite conhecido: uma ressalva posterior ("entire file ... just its signature")
+  // continua sendo tratada conservadoramente como pedido integral.
+  return COMPLETENESS_BEFORE_FILE_TARGET_PATTERN.test(want)
+    || FILE_TARGET_BEFORE_COMPLETENESS_PATTERN.test(want)
+    || LEGACY_SOURCE_OR_TEXT_DUMP_PATTERN.test(want)
+    || (VERBATIM_PATTERN.test(want) && FILE_TARGET_MENTION_PATTERN.test(want));
 }
 
 /**

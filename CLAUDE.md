@@ -179,6 +179,9 @@ points, all in `cli.ts`:
   `tomlString`, Cursor prompt prefix. Do not mount agent directories into the sandbox.
 - **`read_slice` must return source lines, not just `file:line` prefixes** — this is an explicit
   instruction in `readSlicePrompt` and was a real regression (commit c41c2af). Preserve it.
+- **`read_slice` blocks full-file/verbatim dumps before spawning a worker.** `isFullFileRequest` in
+  `prompts.ts` is a deterministic code guard called by the handler in `index.ts`, not just prompt text;
+  the prompt's soft-guard remains fallback coverage for regex misses.
 - **`generate_image` is codex-only.** It is the sole tool with no cursor fallback: the built-in
   `image_gen`/`gpt-image-2` (keyless, via the ChatGPT/Codex subscription) exists only in codex, so the
   handler hard-fails when `hasEngine("codex")` is false. It forces `codex exec` at `IMAGE_MODEL` (env
