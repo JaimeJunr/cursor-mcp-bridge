@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   runCursor, EXPLORE_MODEL, IMAGE_MODEL, DEFAULT_TIMEOUT_MS, budgetNote,
-  formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, resolveFastTier,
+  formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, resolveFastTier, FAST_CANDIDATES,
   isDefaultTierEngine, withTerseStyle,
   raceFirstSuccess, CURSOR_ENABLED,
   type CliResult, type Engine,
@@ -193,7 +193,9 @@ server.registerTool(
         force: true,
         timeoutMs: timeout_ms,
       }),
-      { requestedLevel: 0, matchedRequest: true },
+      // matchedRequest reflete se saiu uma engine nativa (FAST_CANDIDATES) ou o fallback pro cursor
+      // — sem isso, o downgrade pro cursor ficava indistinguível de um roteamento nativo no log.
+      { requestedLevel: 0, matchedRequest: FAST_CANDIDATES.some((c) => c.engine === tier.engine) },
     );
   },
 );

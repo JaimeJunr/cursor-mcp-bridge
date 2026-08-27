@@ -88,7 +88,11 @@ export const CURSOR_ENABLED = ["1", "true", "yes"].includes(
  * Timeout padrão (ms): rede de segurança generosa contra travamentos reais, não orçamento de trabalho.
  * Override via CURSOR_BRIDGE_TIMEOUT_MS.
  */
-export const DEFAULT_TIMEOUT_MS = Number(process.env.CURSOR_BRIDGE_TIMEOUT_MS ?? 1_800_000);
+function resolveDefaultTimeoutMs(): number {
+  const raw = Number(process.env.CURSOR_BRIDGE_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 1_800_000;
+}
+export const DEFAULT_TIMEOUT_MS = resolveDefaultTimeoutMs();
 
 /** Nota de time budget anexada ao prompt de tarefas longas: o worker se auto-gerencia em vez de
  *  ser morto cego ao estourar o timeout. */
@@ -532,8 +536,13 @@ const TIERS: Record<number, TierEntry> = {
   5: { primary: { engine: "claude", model: "opus", effort: "max" }, cursorModel: "claude-opus-max-fast" },
 };
 
-/** Health mínimo (0-1) pra considerar uma engine viável num tier. Abaixo disso, trata como indisponível. */
-const HEALTH_THRESHOLD = 0.3;
+/**
+ * Health mínimo (0-1) pra considerar uma engine viável num tier. Abaixo disso, trata como indisponível.
+ * Exportado só pra teste: um teste de invariante em test/usage.test.ts prova que LATENCY_FLOOR
+ * (src/usage.ts) fica acima disso, senão latência sozinha (sem nenhuma falha) volta a derrubar uma
+ * engine — era exatamente o bug original.
+ */
+export const HEALTH_THRESHOLD = 0.3;
 
 /**
  * Ordem de velocidade observada (mais rápido primeiro), independente de nível de dificuldade —
@@ -564,9 +573,15 @@ export function resolveFastTier(
     if (has(candidate.engine) && healthy(candidate.engine)) return candidate;
   }
   if (cursorEnabled && healthy("cursor")) return { engine: "cursor", model: DEFAULT_MODEL };
+  const anyInstalled = FAST_CANDIDATES.some((c) => has(c.engine));
+  const reason = anyInstalled
+    ? "they are installed but unhealthy (recent failures/timeouts) — retry later or use delegate with an explicit level"
+    : "none of them is installed";
+  const cursorNote = cursorEnabled
+    ? " The cursor-agent fallback is also unhealthy."
+    : " Set CURSOR_BRIDGE_ENABLE_CURSOR=1 to fall back to cursor-agent.";
   throw new Error(
-    "fast_delegate needs at least one healthy CLI among codex, claude, or grok. " +
-    "Install one, or set CURSOR_BRIDGE_ENABLE_CURSOR=1 to fall back to cursor-agent.",
+    `fast_delegate needs at least one healthy CLI among codex, claude, or grok, but ${reason}.${cursorNote}`,
   );
 }
 

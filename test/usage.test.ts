@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { aggregate, buildUsageEntry, classifyOutcome, computeEngineHealth, type UsageEntry } from "../src/usage.js";
+import { aggregate, buildUsageEntry, classifyOutcome, computeEngineHealth, LATENCY_FLOOR, type UsageEntry } from "../src/usage.js";
+import { HEALTH_THRESHOLD } from "../src/cli.js";
 
 describe("aggregate", () => {
   it("sums calls and returned chars per tool", () => {
@@ -143,6 +144,34 @@ describe("computeEngineHealth", () => {
     const defaultCeiling = computeEngineHealth(records, NOW, WINDOW).grok;
     const largerCeiling = computeEngineHealth(records, NOW, WINDOW, 1_800_000).grok;
     expect(largerCeiling).toBeGreaterThan(defaultCeiling);
+  });
+
+  it("keeps a slow-but-successful run at or above HEALTH_THRESHOLD — the exact real-world case that was falsely unhealthy before the fix", () => {
+    const records: UsageEntry[] = [
+      { ts: NOW - 1000, tool: "delegate", outChars: 10, engine: "grok", outcome: "success", durationMs: 22 * 60_000 },
+    ];
+    expect(computeEngineHealth(records, NOW, WINDOW, 1_800_000).grok).toBeGreaterThanOrEqual(HEALTH_THRESHOLD);
+  });
+
+  it("LATENCY_FLOOR stays above HEALTH_THRESHOLD — invariant that keeps latency-only penalties from ever disabling an engine", () => {
+    expect(LATENCY_FLOOR).toBeGreaterThan(HEALTH_THRESHOLD);
+  });
+
+  it("falls back to the default ceiling for a non-finite or non-positive latencyCeilMs", () => {
+    const records: UsageEntry[] = [
+      { ts: NOW - 1000, tool: "delegate", outChars: 10, engine: "codex", outcome: "success", durationMs: 1000 },
+    ];
+    const withDefault = computeEngineHealth(records, NOW, WINDOW).codex;
+    expect(computeEngineHealth(records, NOW, WINDOW, NaN).codex).toBeCloseTo(withDefault);
+    expect(computeEngineHealth(records, NOW, WINDOW, 0).codex).toBeCloseTo(withDefault);
+    expect(computeEngineHealth(records, NOW, WINDOW, -1).codex).toBeCloseTo(withDefault);
+  });
+
+  it("treats a record without durationMs as full latency score regardless of ceiling", () => {
+    const records: UsageEntry[] = [
+      { ts: NOW - 1000, tool: "delegate", outChars: 10, engine: "codex", outcome: "success" },
+    ];
+    expect(computeEngineHealth(records, NOW, WINDOW, 1_800_000).codex).toBe(1);
   });
 
   it("returns empty object for no records", () => {
