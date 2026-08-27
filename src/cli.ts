@@ -88,7 +88,11 @@ export const CURSOR_ENABLED = ["1", "true", "yes"].includes(
  * Timeout padrão (ms): rede de segurança generosa contra travamentos reais, não orçamento de trabalho.
  * Override via CURSOR_BRIDGE_TIMEOUT_MS.
  */
-export const DEFAULT_TIMEOUT_MS = Number(process.env.CURSOR_BRIDGE_TIMEOUT_MS ?? 1_800_000);
+function resolveDefaultTimeoutMs(): number {
+  const raw = Number(process.env.CURSOR_BRIDGE_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 1_800_000;
+}
+export const DEFAULT_TIMEOUT_MS = resolveDefaultTimeoutMs();
 
 /** Nota de time budget anexada ao prompt de tarefas longas: o worker se auto-gerencia em vez de
  *  ser morto cego ao estourar o timeout. */
@@ -532,8 +536,54 @@ const TIERS: Record<number, TierEntry> = {
   5: { primary: { engine: "claude", model: "opus", effort: "max" }, cursorModel: "claude-opus-max-fast" },
 };
 
-/** Health mínimo (0-1) pra considerar uma engine viável num tier. Abaixo disso, trata como indisponível. */
-const HEALTH_THRESHOLD = 0.3;
+/**
+ * Health mínimo (0-1) pra considerar uma engine viável num tier. Abaixo disso, trata como indisponível.
+ * Exportado só pra teste: um teste de invariante em test/usage.test.ts prova que LATENCY_FLOOR
+ * (src/usage.ts) fica acima disso, senão latência sozinha (sem nenhuma falha) volta a derrubar uma
+ * engine — era exatamente o bug original.
+ */
+export const HEALTH_THRESHOLD = 0.3;
+
+/**
+ * Ordem de velocidade observada (mais rápido primeiro), independente de nível de dificuldade —
+ * usada por fast_delegate para sempre pegar a engine/modelo mais rápido disponível e saudável,
+ * sem escolha manual de nível. Grok, mesmo em modelos "rápidos", mostrou latência de vários
+ * minutos em runs reais bem-sucedidos (ver CURSOR_BRIDGE_LOG) — por isso fica por último entre
+ * as engines nativas; cursor só entra como fallback final, igual ao resolveTier.
+ */
+export const FAST_CANDIDATES: Tier[] = [
+  { engine: "codex", model: "gpt-5.6-luna", effort: "low" },
+  { engine: "claude", model: "haiku" },
+  { engine: "grok", model: "grok-4.5", effort: "low" },
+];
+
+/**
+ * Resolve a engine mais rápida instalada E saudável, sem nível — primeira candidata de
+ * FAST_CANDIDATES que passar em has()+healthy(). Cai pro cursor-agent (DEFAULT_MODEL) só quando
+ * nenhuma engine nativa está disponível/saudável E cursorEnabled; senão lança erro claro listando
+ * o que falta. `has`/`cursorEnabled`/`health` são injetados para teste, mesmo padrão de resolveTier.
+ */
+export function resolveFastTier(
+  has: (e: Engine) => boolean = hasEngine,
+  cursorEnabled: boolean = CURSOR_ENABLED,
+  health?: Record<string, number>,
+): Tier {
+  const healthy = (e: Engine): boolean => health === undefined || (health[e] ?? 1) >= HEALTH_THRESHOLD;
+  for (const candidate of FAST_CANDIDATES) {
+    if (has(candidate.engine) && healthy(candidate.engine)) return candidate;
+  }
+  if (cursorEnabled && healthy("cursor")) return { engine: "cursor", model: DEFAULT_MODEL };
+  const anyInstalled = FAST_CANDIDATES.some((c) => has(c.engine));
+  const reason = anyInstalled
+    ? "they are installed but unhealthy (recent failures/timeouts) — retry later or use delegate with an explicit level"
+    : "none of them is installed";
+  const cursorNote = cursorEnabled
+    ? " The cursor-agent fallback is also unhealthy."
+    : " Set CURSOR_BRIDGE_ENABLE_CURSOR=1 to fall back to cursor-agent.";
+  throw new Error(
+    `fast_delegate needs at least one healthy CLI among codex, claude, or grok, but ${reason}.${cursorNote}`,
+  );
+}
 
 /**
  * Roteia o nível (1-5) para (engine, modelo, effort). Usa a engine preferida do nível se instalada

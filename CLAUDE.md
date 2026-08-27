@@ -29,16 +29,18 @@ There is no linter configured. `npm run build` (tsc, `strict: true`) is the type
 Five small modules under `src/`, with pure logic covered by `test/*.test.ts`. The split exists so
 the **pure logic is testable without spawning a worker process**:
 
-- `index.ts` — MCP server + tool registrations (ten tools: `delegate`, `explore`, `read_slice`,
-  `run_filtered`, `web_lookup`, `generate_image`, `plan`, `build`, `follow_up`, `bridge_stats`).
+- `index.ts` — MCP server + tool registrations (twelve tools: `delegate`, `fast_delegate`, `explore`,
+  `read_slice`, `run_filtered`, `web_lookup`, `plan`, `build`, `fan_out`, `generate_image`,
+  `follow_up`, `bridge_stats`).
   Owns tool descriptions and the shared `routing` params (`cwd`/`model`/`effort`). The second arg
   to `new McpServer(...)` is an `instructions` string that states the routing boundary
   (read/locate/web/grunt-work → bridge tools; native Read only when about to edit). These load at
   **startup** and are visible to the host even while tool schemas are deferred — that is why they
   matter for adoption. The five core tools (`delegate`, `explore`, `read_slice`, `run_filtered`,
   `web_lookup`) register with `_meta: { "anthropic/alwaysLoad": true }` so Claude Code (≥2.1.121)
-  eagerly loads their schemas; secondary tools (`generate_image`, `plan`, `build`, `follow_up`,
-  `bridge_stats`) stay deferred. `format()` appends the `session_id` footer and logs usage;
+  eagerly loads their schemas; secondary tools (`fast_delegate`, `plan`, `build`, `fan_out`,
+  `generate_image`, `follow_up`, `bridge_stats`) stay deferred. `format()` appends the `session_id`
+  footer and logs usage;
   `follow_up` feeds that id back as `RunOpts.resume` so a prior worker session continues without
   resending its context — the footer and `follow_up` are two ends of the same loop.
   `follow_up` takes an optional `mode` — without it, a resumed session regains full tool access, so
@@ -47,9 +49,9 @@ the **pure logic is testable without spawning a worker process**:
 - `cli.ts` — the only module that touches the child process. `runCursor()` spawns the engine's CLI;
   `buildCursorArgs()`/`buildGrokArgs()`/`buildCodexArgs()`/`buildClaudeArgs()` (+ `buildArgs`
   dispatcher), `resolveModel()`, `parseCliJson()`/`parseCodexJsonl()` (+ `parseOutput` dispatcher),
-  `resolveTier()`, `hasEngine()`, `binExists()`, `budgetNote()` are **pure** and unit-tested. Keep
-  the spawn boundary here — do not spawn from elsewhere.
-- `agents.ts` — resolves an optional `delegate`/`build` persona on the host. A name such as
+  `resolveTier()`, `resolveFastTier()`, `hasEngine()`, `binExists()`, `budgetNote()` are **pure** and
+  unit-tested. Keep the spawn boundary here — do not spawn from elsewhere.
+- `agents.ts` — resolves an optional `delegate`/`fast_delegate`/`build` persona on the host. A name such as
   `pit:issue-investigator` searches project/home `.claude/agents` and `~/.claude/plugins`; plugin
   collisions pick the newest match by mtime. An inline `{prompt}` skips lookup. Only the markdown
   body crosses into the worker, and names containing `/` or `..` are rejected.
@@ -88,6 +90,11 @@ using a distinct model at every level across the three active subscriptions: 1=G
 5=Opus max (claude). `resolveTier(level, has, cursorEnabled)` uses the preferred CLI when present. If it
 is missing, it falls back to the equivalent Cursor model only when `cursorEnabled` is true;
 otherwise it throws a clear error naming the missing CLI.
+
+`fast_delegate` has no level. `resolveFastTier(has, cursorEnabled, health)` picks the first installed,
+healthy candidate in the measured speed order Codex Luna low → Claude Haiku → Grok 4.5 low, then the
+opt-in Cursor `DEFAULT_MODEL` as the final fallback. It keeps the same full read/edit/shell access,
+persona resolution, timeout budget note, and explicit `model`/`effort` overrides as `delegate`.
 - `prompts.ts` — pure prompt builders (`readSlicePrompt`, `runFilteredPrompt`, `explorePrompt`,
   `webLookupPrompt`, `planPrompt`, `buildPrompt`). The tools' behavior lives in these prompt strings,
   so changing a tool's contract usually means editing a prompt here (and its test), not `cli.ts`.
@@ -162,6 +169,15 @@ points, all in `cli.ts`:
   `DEFAULT_MODEL` (env `CURSOR_BRIDGE_MODEL`) applies to the opt-in Cursor path. The current
   cursor-agent rejects `composer-2.5[fast=true]`. `resolveModel` still accepts caller-supplied
   `auto`, but it is not the default.
+- **Health latency uses the real runtime timeout.** `computeEngineHealth(records, now, windowMs,
+  latencyCeilMs)` retains 300,000ms as its optional-parameter default for backward compatibility,
+  but `currentEngineHealth()` passes `DEFAULT_TIMEOUT_MS` (30min by default). The old fixed 5min
+  ceiling zeroed successful 5–22min runs and falsely made engines unhealthy despite no failure or
+  timeout. Both `resolveTier` and `resolveFastTier` use the resulting score at the shared 0.3 threshold.
+- **`fast_delegate` is speed-first and deferred.** `FAST_CANDIDATES` is ordered Codex Luna low,
+  Claude Haiku, Grok 4.5 low; `resolveFastTier` skips missing or unhealthy native engines before the
+  opt-in Cursor fallback. Keep it level-free, with the neutral usage receipt
+  `{ requestedLevel: 0, matchedRequest: true }`, and do not mark it `alwaysLoad`.
 - **`explore`/`read_slice`/`run_filtered`/`web_lookup` run on codex at
   `EXPLORE_MODEL=gpt-5.6-luna`.** An explicit `model` still wins. `explore` and `read_slice` pass a
   mode for `-s read-only`; `web_lookup` also sets `RunOpts.web`, which adds
@@ -199,12 +215,13 @@ points, all in `cli.ts`:
   `run_filtered`, `web_lookup`) register with `_meta: { "anthropic/alwaysLoad": true }` so Claude
   Code (≥2.1.121) eagerly loads their schemas instead of deferring them. Deferred tools lose to
   always-loaded native Read/Grep — that was the root adoption bug. Secondary tools
-  (`generate_image`, `plan`, `build`, `follow_up`, `bridge_stats`) stay deferred. Do not strip
+  (`fast_delegate`, `generate_image`, `plan`, `build`, `fan_out`, `follow_up`, `bridge_stats`) stay
+  deferred. Do not strip
   `alwaysLoad` from the core five or add it to the secondary set without intent.
 - **Timeout is a safety net, not a work budget.** `DEFAULT_TIMEOUT_MS` is 30 min (`1_800_000`),
   overridable via `CURSOR_BRIDGE_TIMEOUT_MS`. Pure helper `budgetNote(timeoutMs)` appends a
   `[Time budget: ~N min ... return partial results ...]` note to the prompt of the three
-  **execution** tools (`delegate`, `plan`, `build`) so the worker self-manages instead of being
+  **execution** tools (`delegate`, `fast_delegate`, `plan`, `build`) so the worker self-manages instead of being
   killed blind. Read tools (`explore`, `read_slice`, `run_filtered`, `web_lookup`) do not get it.
   Keep that split.
 

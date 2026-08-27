@@ -88,22 +88,38 @@ export function readUsage(): UsageEntry[] {
   return out;
 }
 
-/** Duração (ms) acima da qual um run bem-sucedido é tratado como "no limite" (score de latência → 0). */
+/** Default compatível: teto de latência usado só quando o chamador não injeta seu budget real. */
 const LATENCY_CEIL_MS = 300_000;
 
 /**
+ * Piso do score de latência (nunca abaixo disso, mesmo pra um sucesso arbitrariamente lento).
+ * PRECISA ficar acima de HEALTH_THRESHOLD (0.3, src/cli.ts) — é essa folga que garante que latência
+ * SOZINHA nunca deixa uma engine "unhealthy"; só failure/timeout (outcomeScore=0) derruba abaixo do
+ * threshold. Sem esse piso, um teto de latência baixo (ou até o DEFAULT_TIMEOUT_MS inteiro) ainda
+ * marcava sucessos lentos-mas-reais como engine quebrada — era o bug original, só empurrado pra uma
+ * duração maior em vez de corrigido (ver test/health-latency-tdr.test.ts).
+ */
+export const LATENCY_FLOOR = 0.4;
+
+/**
  * Deriva um score de saúde (0-1) por engine a partir do log de uso, dentro de uma janela de decaimento
- * (`windowMs`, default 30min). Cada registro pesa por idade dentro da janela (decaimento exponencial —
+ * (`windowMs`, default 30min). `latencyCeilMs` mantém o teto antigo de 5min por compatibilidade, mas
+ * o runtime injeta seu timeout real para não confundir sucesso dentro do budget com engine quebrada;
+ * um valor não-finito ou <= 0 (env mal configurada) cai de volta pro default em vez de envenenar o
+ * score com NaN/Infinity. Cada registro pesa por idade dentro da janela (decaimento exponencial —
  * meia-vida de 1/4 da janela), então falhas/timeouts recentes derrubam o score mais que os antigos.
  * Combina taxa de falha/timeout (0 se outcome ruim, 1 se sucesso) com um score de latência (penaliza
- * runs bem-sucedidos mas lentos). Registros sem `engine` são ignorados — não há o que atribuir. Função
- * pura; `now` é injetado pelo chamador (src/index.ts fica com o I/O de ler o log e pegar Date.now()).
+ * runs bem-sucedidos mas lentos, com piso em LATENCY_FLOOR — ver doc lá). Registros sem `engine` são
+ * ignorados — não há o que atribuir. Função pura; `now` é injetado pelo chamador (src/index.ts fica
+ * com o I/O de ler o log e pegar Date.now()). Resultado sempre clampado em [0,1].
  */
 export function computeEngineHealth(
   records: UsageEntry[],
   now: number,
   windowMs: number = 30 * 60 * 1000,
+  latencyCeilMs: number = LATENCY_CEIL_MS,
 ): Record<string, number> {
+  const ceil = Number.isFinite(latencyCeilMs) && latencyCeilMs > 0 ? latencyCeilMs : LATENCY_CEIL_MS;
   const halfLife = windowMs / 4;
   const byEngine: Record<string, { weight: number; weightedScore: number }> = {};
   for (const r of records) {
@@ -113,7 +129,7 @@ export function computeEngineHealth(
     const weight = Math.pow(0.5, age / halfLife);
     const outcomeScore = r.outcome === "failure" || r.outcome === "timeout" ? 0 : 1;
     const latencyScore = r.durationMs !== undefined
-      ? Math.max(0, 1 - r.durationMs / LATENCY_CEIL_MS)
+      ? Math.max(LATENCY_FLOOR, 1 - r.durationMs / ceil)
       : 1;
     const bucket = byEngine[r.engine] ?? { weight: 0, weightedScore: 0 };
     bucket.weight += weight;
@@ -122,7 +138,7 @@ export function computeEngineHealth(
   }
   const out: Record<string, number> = {};
   for (const [engine, b] of Object.entries(byEngine)) {
-    out[engine] = b.weight > 0 ? b.weightedScore / b.weight : 1;
+    out[engine] = b.weight > 0 ? Math.min(1, Math.max(0, b.weightedScore / b.weight)) : 1;
   }
   return out;
 }
