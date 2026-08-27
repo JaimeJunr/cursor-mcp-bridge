@@ -4,7 +4,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import {
   runCursor, EXPLORE_MODEL, IMAGE_MODEL, DEFAULT_TIMEOUT_MS, budgetNote,
-  formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, isDefaultTierEngine, withTerseStyle,
+  formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, resolveFastTier,
+  isDefaultTierEngine, withTerseStyle,
   raceFirstSuccess, CURSOR_ENABLED,
   type CliResult, type Engine,
 } from "./cli.js";
@@ -41,7 +42,7 @@ const routing = {
     .describe("Reasoning effort for parameterized models (e.g. 'low'|'high'). Ignored by 'auto'."),
 };
 
-// Persona especializada, resolvida no host por resolveAgent. Compartilhada por delegate e build.
+// Persona especializada, resolvida no host por resolveAgent. Compartilhada por delegate/fast_delegate/build.
 const agentSchema = z.union([
   z.string(),
   z.object({ prompt: z.string(), name: z.string().optional(), model: z.string().optional() }),
@@ -53,7 +54,7 @@ const agentDescription =
  * Formata o resultado do Cursor: passa o texto pelo egress scrubber (scrubSecrets) antes do footer
  * de session_id, loga os chars devolvidos ao contexto (custo real) e — quando algo foi redigido —
  * loga também um evento "blocked_exfil". `tier` (opcional) carrega o tier-integrity receipt de
- * quem chamou resolveTier (delegate/plan/build); tools sem tier (explore, read_slice, ...) omitem.
+ * quem chamou o resolver (delegate/fast_delegate/plan/build); tools sem tier omitem.
  */
 function format(
   tool: string,
@@ -74,9 +75,10 @@ function format(
   return { content: [{ type: "text", text }] };
 }
 
-/** Saúde atual das engines a partir do log. I/O + Date.now() ficam aqui — resolveTier permanece pura. */
+/** Saúde atual das engines a partir do log. I/O + Date.now() ficam aqui — os resolvers permanecem puros. */
 function currentEngineHealth(): Record<string, number> {
-  return computeEngineHealth(readUsage(), Date.now());
+  // O teto acompanha o budget real: sucesso dentro do timeout não deve parecer engine quebrada só por latência.
+  return computeEngineHealth(readUsage(), Date.now(), 30 * 60 * 1000, DEFAULT_TIMEOUT_MS);
 }
 
 /**
@@ -153,6 +155,45 @@ server.registerTool(
         timeoutMs: timeout_ms,
       }),
       { requestedLevel: level, matchedRequest: isDefaultTierEngine(level, tier.engine) },
+    );
+  },
+);
+
+server.registerTool(
+  "fast_delegate",
+  {
+    description:
+      "Delegate a task to whichever coding-agent CLI is currently the fastest AND healthy — no level to pick. Same full read/edit/shell access as delegate, same worker (does not see your context). Use for quick, self-contained work where you don't want to think about tiers; use delegate with an explicit level when you need a specific difficulty/quality tier instead.",
+    inputSchema: {
+      prompt: z.string().describe("The complete task prompt for the worker agent."),
+      agent: agentSchema.optional().describe(agentDescription),
+      timeout_ms: z
+        .number()
+        .int()
+        .positive()
+        .optional()
+        .describe("Max wall-clock ms for this delegation. Default 1800000 (30 min). Raise for unusually long build-heavy tasks."),
+      ...routing,
+    },
+  },
+  // A ordem observada escolhe engine+modelo+effort; overrides explícitos continuam vencendo.
+  async ({ prompt, agent, timeout_ms, cwd, model, effort }) => {
+    const tier = resolveFastTier(hasEngine, CURSOR_ENABLED, currentEngineHealth());
+    const resolved = agent ? resolveAgent(agent, cwd ?? process.cwd()) : undefined;
+    return formatRun(
+      "fast_delegate",
+      tier.engine,
+      () => runCursor({
+        prompt: prompt + budgetNote(timeout_ms ?? DEFAULT_TIMEOUT_MS),
+        cwd,
+        engine: tier.engine,
+        model: model ?? tier.model,
+        effort: effort ?? tier.effort,
+        agentPrompt: withTerseStyle(resolved?.prompt),
+        force: true,
+        timeoutMs: timeout_ms,
+      }),
+      { requestedLevel: 0, matchedRequest: true },
     );
   },
 );

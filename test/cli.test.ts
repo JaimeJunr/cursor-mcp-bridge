@@ -5,8 +5,9 @@ import { join } from "node:path";
 import {
   buildCursorArgs, buildGrokArgs, buildCodexArgs, buildClaudeArgs, buildArgs, buildSandboxArgs, buildSandboxSpec,
   budgetNote, formatSessionHandle, parseSessionHandle, parseCliJson, parseCodexJsonl, resolveModel, resolveTier,
+  resolveFastTier,
   isCodexEnvError, withTerseStyle, TERSE_STYLE, FALLBACK_ENGINE_ORDER, isDefaultTierEngine, raceFirstSuccess,
-  fallbackOpts,
+  fallbackOpts, DEFAULT_MODEL,
   type SandboxSpec, type Engine,
 } from "../src/cli.js";
 import { computeEngineHealth } from "../src/usage.js";
@@ -533,6 +534,42 @@ describe("resolveTier", () => {
 
   it("lança erro quando a engine preferida está unhealthy e o cursor está desabilitado", () => {
     expect(() => resolveTier(1, all, false, { codex: 0.1 })).toThrow(/needs the 'codex' CLI/);
+  });
+});
+
+describe("resolveFastTier", () => {
+  it("escolhe a engine saudável mais rápida na ordem codex, claude, grok", () => {
+    const all: (e: Engine) => boolean = () => true;
+    expect(resolveFastTier(all)).toEqual({ engine: "codex", model: "gpt-5.6-luna", effort: "low" });
+  });
+
+  it("cai para claude e depois grok conforme as engines mais rápidas faltam", () => {
+    expect(resolveFastTier((e) => e !== "codex")).toEqual({ engine: "claude", model: "haiku" });
+    expect(resolveFastTier((e) => e === "grok")).toEqual({ engine: "grok", model: "grok-4.5", effort: "low" });
+  });
+
+  it("pula engine instalada mas unhealthy", () => {
+    const all: (e: Engine) => boolean = () => true;
+    expect(resolveFastTier(all, false, { codex: 0.29, claude: 0.8 })).toEqual({
+      engine: "claude",
+      model: "haiku",
+    });
+  });
+
+  it("lança erro quando nenhuma engine nativa está disponível ou saudável e cursor está desabilitado", () => {
+    expect(() => resolveFastTier(() => false, false)).toThrow(/needs at least one healthy CLI/);
+    expect(() => resolveFastTier(() => true, false, { codex: 0.1, claude: 0.1, grok: 0.1 }))
+      .toThrow(/needs at least one healthy CLI/);
+  });
+
+  it("cai para cursor com DEFAULT_MODEL quando nenhuma engine nativa está disponível ou saudável", () => {
+    expect(resolveFastTier(() => false, true)).toEqual({ engine: "cursor", model: DEFAULT_MODEL });
+    expect(resolveFastTier(() => true, true, {
+      codex: 0.1,
+      claude: 0.1,
+      grok: 0.1,
+      cursor: 0.9,
+    })).toEqual({ engine: "cursor", model: DEFAULT_MODEL });
   });
 });
 

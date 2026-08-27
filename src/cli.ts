@@ -536,6 +536,41 @@ const TIERS: Record<number, TierEntry> = {
 const HEALTH_THRESHOLD = 0.3;
 
 /**
+ * Ordem de velocidade observada (mais rápido primeiro), independente de nível de dificuldade —
+ * usada por fast_delegate para sempre pegar a engine/modelo mais rápido disponível e saudável,
+ * sem escolha manual de nível. Grok, mesmo em modelos "rápidos", mostrou latência de vários
+ * minutos em runs reais bem-sucedidos (ver CURSOR_BRIDGE_LOG) — por isso fica por último entre
+ * as engines nativas; cursor só entra como fallback final, igual ao resolveTier.
+ */
+export const FAST_CANDIDATES: Tier[] = [
+  { engine: "codex", model: "gpt-5.6-luna", effort: "low" },
+  { engine: "claude", model: "haiku" },
+  { engine: "grok", model: "grok-4.5", effort: "low" },
+];
+
+/**
+ * Resolve a engine mais rápida instalada E saudável, sem nível — primeira candidata de
+ * FAST_CANDIDATES que passar em has()+healthy(). Cai pro cursor-agent (DEFAULT_MODEL) só quando
+ * nenhuma engine nativa está disponível/saudável E cursorEnabled; senão lança erro claro listando
+ * o que falta. `has`/`cursorEnabled`/`health` são injetados para teste, mesmo padrão de resolveTier.
+ */
+export function resolveFastTier(
+  has: (e: Engine) => boolean = hasEngine,
+  cursorEnabled: boolean = CURSOR_ENABLED,
+  health?: Record<string, number>,
+): Tier {
+  const healthy = (e: Engine): boolean => health === undefined || (health[e] ?? 1) >= HEALTH_THRESHOLD;
+  for (const candidate of FAST_CANDIDATES) {
+    if (has(candidate.engine) && healthy(candidate.engine)) return candidate;
+  }
+  if (cursorEnabled && healthy("cursor")) return { engine: "cursor", model: DEFAULT_MODEL };
+  throw new Error(
+    "fast_delegate needs at least one healthy CLI among codex, claude, or grok. " +
+    "Install one, or set CURSOR_BRIDGE_ENABLE_CURSOR=1 to fall back to cursor-agent.",
+  );
+}
+
+/**
  * Roteia o nível (1-5) para (engine, modelo, effort). Usa a engine preferida do nível se instalada
  * E saudável (quando `health` é passado — ver computeEngineHealth em src/usage.ts). Se faltar ou
  * estiver unhealthy: cai para o cursor-agent equivalente SÓ quando CURSOR_ENABLED E o próprio cursor

@@ -136,6 +136,15 @@ describe("computeEngineHealth", () => {
     );
   });
 
+  it("reduces the latency penalty when given a ceiling matching a larger time budget", () => {
+    const records: UsageEntry[] = [
+      { ts: NOW - 1000, tool: "delegate", outChars: 10, engine: "grok", outcome: "success", durationMs: 600_000 },
+    ];
+    const defaultCeiling = computeEngineHealth(records, NOW, WINDOW).grok;
+    const largerCeiling = computeEngineHealth(records, NOW, WINDOW, 1_800_000).grok;
+    expect(largerCeiling).toBeGreaterThan(defaultCeiling);
+  });
+
   it("returns empty object for no records", () => {
     expect(computeEngineHealth([], NOW, WINDOW)).toEqual({});
   });
