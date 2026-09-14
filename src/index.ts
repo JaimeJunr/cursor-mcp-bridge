@@ -153,6 +153,7 @@ server.registerTool(
         agentPrompt: withTerseStyle(resolved?.prompt),
         force: true,
         timeoutMs: timeout_ms,
+        tool: "delegate",
       }),
       { requestedLevel: level, matchedRequest: isDefaultTierEngine(level, tier.engine) },
     );
@@ -192,6 +193,7 @@ server.registerTool(
         agentPrompt: withTerseStyle(resolved?.prompt),
         force: true,
         timeoutMs: timeout_ms,
+        tool: "fast_delegate",
       }),
       // matchedRequest reflete se saiu uma engine nativa (FAST_CANDIDATES) ou o fallback pro cursor
       // — sem isso, o downgrade pro cursor ficava indistinguível de um roteamento nativo no log.
@@ -230,7 +232,7 @@ server.registerTool(
     const { prompt, mode } = explorePrompt(question, files, breadth);
     // read-only (mode) com o modelo barato de leitura (luna) por default. O worker localiza/mapeia sem editar.
     const { engine, model: auxModel } = resolveAuxTool("explore", { engine: engineParam, model });
-    return format("explore", await runCursor({ prompt, cwd, engine, model: auxModel, effort, mode, agentPrompt: withTerseStyle() }));
+    return format("explore", await runCursor({ prompt, cwd, engine, model: auxModel, effort, mode, agentPrompt: withTerseStyle(), tool: "explore" }));
   },
 );
 
@@ -263,7 +265,7 @@ server.registerTool(
       });
     }
     const { engine, model: auxModel } = resolveAuxTool("read_slice", { engine: engineParam, model });
-    return format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine, model: auxModel, effort, mode: "ask", agentPrompt: withTerseStyle() }));
+    return format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine, model: auxModel, effort, mode: "ask", agentPrompt: withTerseStyle(), tool: "read_slice" }));
   },
 );
 
@@ -287,7 +289,7 @@ server.registerTool(
     // sem mode → bypass total: rodar o comando (que pode escrever) É o propósito do tool.
     // force mantém a paridade quando o fallback é cursor. O worker filtra o output por relevância.
     const { engine, model: auxModel } = resolveAuxTool("run_filtered", { engine: engineParam, model });
-    return format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, engine, model: auxModel, effort, force: true, agentPrompt: withTerseStyle() }));
+    return format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, engine, model: auxModel, effort, force: true, agentPrompt: withTerseStyle(), tool: "run_filtered" }));
   },
 );
 
@@ -310,7 +312,7 @@ server.registerTool(
     // read-only (mode:'ask' → filesystem intocado) + web:true liga a busca web do codex
     // (-c tools.web_search=true). approval_policy=never evita pendurar em headless.
     const { engine, model: auxModel } = resolveAuxTool("web_lookup", { engine: engineParam, model });
-    return format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine, model: auxModel, effort, mode: "ask", web: true, agentPrompt: withTerseStyle() }));
+    return format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine, model: auxModel, effort, mode: "ask", web: true, agentPrompt: withTerseStyle(), tool: "web_lookup" }));
   },
 );
 
@@ -335,7 +337,7 @@ server.registerTool(
   async ({ prompt, levels, mode, cwd }) => {
     const tiers = levels.map((level) => ({ level, tier: resolveTier(level) }));
     const runs = tiers.map(({ level, tier }) =>
-      runCursor({ prompt, cwd, engine: tier.engine, model: tier.model, effort: tier.effort, force: true })
+      runCursor({ prompt, cwd, engine: tier.engine, model: tier.model, effort: tier.effort, force: true, tool: "fan_out" })
         .then((res) => ({ level, tier, res })),
     );
 
@@ -357,6 +359,7 @@ server.registerTool(
       model: EXPLORE_MODEL,
       mode: "ask",
       agentPrompt: withTerseStyle(),
+      tool: "fan_out",
     });
     const footer = outputs
       .map((o) => `- ${o.engine} (level ${o.level})${o.sessionId ? `: ${formatSessionHandle(o.engine as Engine, o.sessionId)}` : o.error ? ": FAILED" : ": no session_id"}`)
@@ -402,7 +405,7 @@ server.registerTool(
     if (eng === "grok") {
       return format(
         "generate_image",
-        await runCursor({ prompt, cwd, engine: "grok", force: true }),
+        await runCursor({ prompt, cwd, engine: "grok", force: true, tool: "generate_image" }),
       );
     }
     return format(
@@ -415,6 +418,7 @@ server.registerTool(
         effort: "low",
         force: true,
         images: input_images,
+        tool: "generate_image",
       }),
     );
   },
@@ -441,7 +445,7 @@ server.registerTool(
     const { engine, id } = parseSessionHandle(session_id);
     return format(
       "follow_up",
-      await runCursor({ prompt: question, engine, resume: id, mode, cwd, model, effort, force: true, agentPrompt: withTerseStyle() }),
+      await runCursor({ prompt: question, engine, resume: id, mode, cwd, model, effort, force: true, agentPrompt: withTerseStyle(), tool: "follow_up" }),
     );
   },
 );

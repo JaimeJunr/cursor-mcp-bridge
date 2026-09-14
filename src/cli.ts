@@ -400,6 +400,295 @@ export function resolveAuxTool(
   return { engine, model: params.model ?? env[`${prefix}_MODEL`] ?? defaultModel };
 }
 
+/** Cota do plano acabou (trocar de engine resolve) versus throttle transitório (só esperar resolve). */
+export type QuotaErrorKind = "quota_exhausted" | "rate_limited";
+
+/** Os três canais de uma falha de processo. O sinal de cota vive em stdout, não em stderr. */
+export interface CliFailureOutput {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+}
+
+type JsonObject = Record<string, unknown>;
+
+function record(value: unknown): JsonObject | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as JsonObject
+    : undefined;
+}
+
+function stringField(obj: JsonObject | undefined, key: string): string | undefined {
+  const value = obj?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** Aceita objeto único (grok/claude) ou JSONL (codex); linhas não-JSON são ruído e são puladas. */
+function parseJsonObjects(raw: string): JsonObject[] {
+  const trimmed = raw.trim();
+  if (!trimmed) return [];
+  try {
+    const whole = record(JSON.parse(trimmed));
+    if (whole) return [whole];
+  } catch { /* pode ser JSONL */ }
+
+  const objects: JsonObject[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim().startsWith("{")) continue;
+    try {
+      const value = record(JSON.parse(line));
+      if (value) objects.push(value);
+    } catch { /* ruído não JSON */ }
+  }
+  return objects;
+}
+
+function collectStrings(value: unknown, out: string[]): void {
+  if (typeof value === "string") { out.push(value); return; }
+  if (Array.isArray(value)) { for (const item of value) collectStrings(item, out); return; }
+  const obj = record(value);
+  if (obj) for (const item of Object.values(obj)) collectStrings(item, out);
+}
+
+/**
+ * Desaninha um JSON serializado DENTRO de uma string. É assim que o grok entrega o sinal: o
+ * `http_status` real chega como texto dentro de `errors[0]` ("Internal error: { ... }"), não como
+ * campo de primeiro nível — sem desaninhar, o 402 observado em runtime passa despercebido.
+ */
+function unnestJson(text: string): JsonObject | undefined {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end <= start) return undefined;
+  try {
+    return record(JSON.parse(text.slice(start, end + 1)));
+  } catch {
+    return undefined;
+  }
+}
+
+/** Todos os http_status visíveis: campo de primeiro nível ou aninhado como texto em qualquer string. */
+function httpStatuses(objects: JsonObject[]): number[] {
+  const out: number[] = [];
+  const strings: string[] = [];
+  for (const obj of objects) {
+    if (typeof obj.http_status === "number") out.push(obj.http_status);
+    collectStrings(obj, strings);
+  }
+  for (const text of strings) {
+    const nested = unnestJson(text);
+    if (nested && typeof nested.http_status === "number") out.push(nested.http_status);
+  }
+  return out;
+}
+
+function normalizeErrorText(value: string): string {
+  return value.replace(/[‘’]/g, "'").toLowerCase();
+}
+
+/**
+ * Padrões de cota esgotada por engine. Origem e confiança diferem e isso importa: o grok foi
+ * OBSERVADO em runtime (2026-09-13), o codex teve a string confirmada em runtime, e o claude vem
+ * só do fonte/binário — ainda sem captura. Nada de regex genérica ("exceeded", "429" solto): um
+ * padrão frouxo classifica auth expirado como cota e esconde o remédio real (re-autenticar).
+ */
+const QUOTA_PATTERNS: Record<Engine, RegExp[]> = {
+  codex: [
+    /\byou've hit your usage limit\b/,
+    /\byour workspace is out of credits\b/,
+    /\byou hit your spend cap\b/,
+  ],
+  grok: [/\bgrok build usage balance exhausted\b/],
+  claude: [
+    /\busage limit reached\b/,
+    /\byou've reached your usage limit\b/,
+    /\byou've hit your (?:session|weekly|opus|sonnet) limit\b/,
+    /\bspend limit reached\b/,
+    /\bcredit balance (?:is )?too low\b/,
+  ],
+  // Nenhuma captura de cota do cursor-agent existe; o que foi observado nele é erro de auth.
+  cursor: [],
+};
+
+/** Throttle transitório — distinto de cota. A mensagem correspondente pede espera, nunca troca. */
+const RATE_LIMIT_PATTERNS: Record<Engine, RegExp[]> = {
+  codex: [/\brate limit exceeded\b/],
+  grok: [],
+  claude: [
+    /\bserver is temporarily limiting requests\b/,
+    /\brequest rejected \(429\)\b/,
+  ],
+  cursor: [],
+};
+
+/**
+ * Classifica a causa de uma falha de processo: cota esgotada, rate limit, ou nada (null).
+ * Lê primeiro campos JSON estruturados e só depois aplica regex sobre as mensagens de erro
+ * extraídas — os CLIs emitem o JSON útil em stdout, e o exit code só distingue sucesso de falha.
+ * Um padrão que não casa devolve null e a falha propaga crua: classificar errado é pior que não
+ * classificar (ver ADENDO 3 do spike — auth expirado tratado como cota mascarou um bug do bridge).
+ * Função pura. Padrões: .ralph/mcp-bridge-v2/spikes/quota-patterns.md (com os três adendos).
+ */
+export function classifyQuotaError(output: CliFailureOutput, engine: Engine): QuotaErrorKind | null {
+  // Guarda contra uma resposta bem-sucedida que apenas mencione essas mensagens.
+  if (output.exitCode === 0) return null;
+
+  const objects = parseJsonObjects(output.stdout);
+  const serialized = normalizeErrorText(JSON.stringify(objects));
+  let structuredRateLimit = false;
+
+  if (engine === "grok") {
+    const statuses = httpStatuses(objects);
+    if (statuses.includes(402)) return "quota_exhausted";
+    if (statuses.includes(429)) structuredRateLimit = true;
+    if (serialized.includes("subscription:free-usage-exhausted")) return "quota_exhausted";
+  }
+  // Campos tipados do codex: ausentes no `exec --json` de hoje, aceitos se uma versão futura os expuser.
+  if (engine === "codex") {
+    if (/usage_limit_exceeded|quota_exceeded/.test(serialized)) return "quota_exhausted";
+    if (/rate_limit_exceeded/.test(serialized)) structuredRateLimit = true;
+  }
+
+  const messages: string[] = [output.stderr];
+  for (const obj of objects) {
+    const nestedError = record(obj.error);
+    const payload = record(obj.payload);
+
+    if (engine === "codex") {
+      if (obj.type === "error") messages.push(stringField(obj, "message") ?? "");
+      if (obj.type === "turn.failed") messages.push(stringField(nestedError, "message") ?? "");
+      if (payload?.type === "error") messages.push(stringField(payload, "message") ?? "");
+    }
+
+    if (engine === "grok") {
+      if (obj.type === "error") messages.push(stringField(obj, "message") ?? "");
+      // O JSON headless atual não expõe o -32003 do ACP; aceita se isso voltar.
+      if (obj.code === -32003) structuredRateLimit = true;
+      if (Array.isArray(obj.errors)) {
+        messages.push(...obj.errors.filter((v): v is string => typeof v === "string"));
+      }
+    }
+
+    if (engine === "claude") {
+      const isTerminalError = obj.is_error === true || obj.type === "error";
+      if (obj.type === "rate_limit_event" && record(obj.rate_limit_info)?.status === "rejected") {
+        return "quota_exhausted";
+      }
+      // system/api_retry é intermediário; sozinho não é causa terminal.
+      if (isTerminalError && obj.api_error_status === 429) structuredRateLimit = true;
+      if (stringField(nestedError, "type") === "rate_limit_error") structuredRateLimit = true;
+      if (isTerminalError) {
+        messages.push(stringField(obj, "result") ?? "", stringField(nestedError, "message") ?? "");
+        if (Array.isArray(obj.errors)) {
+          messages.push(...obj.errors.filter((v): v is string => typeof v === "string"));
+        }
+      }
+    }
+  }
+  // Se o processo quebrou antes de emitir JSON válido, ainda permite o fallback textual.
+  if (objects.length === 0) messages.push(output.stdout);
+
+  const text = normalizeErrorText(messages.join("\n"));
+  if (QUOTA_PATTERNS[engine].some((pattern) => pattern.test(text))) return "quota_exhausted";
+  if (structuredRateLimit || RATE_LIMIT_PATTERNS[engine].some((pattern) => pattern.test(text))) {
+    return "rate_limited";
+  }
+  return null;
+}
+
+/** As tools que passam por runCursor. Define a FORMA da sugestão no erro de cota. */
+export type BridgeTool =
+  | AuxTool | "delegate" | "fast_delegate" | "fan_out" | "generate_image" | "follow_up";
+
+/**
+ * Erro de cota/rate limit. Nunca dispara retry automático: só a falha de AMBIENTE do codex
+ * (isCodexEnvError) entra no FALLBACK_ENGINE_ORDER. Trocar de engine por conta própria diante de
+ * cota gastaria a próxima assinatura sem o usuário decidir; diante de rate limit, nem resolveria.
+ */
+export class QuotaError extends Error {
+  constructor(
+    readonly kind: QuotaErrorKind,
+    readonly engine: Engine,
+    message: string,
+  ) {
+    super(message);
+    this.name = "QuotaError";
+  }
+}
+
+/**
+ * Engines que o usuário pode realmente usar depois da cota estourar: instaladas, habilitadas
+ * (cursor só sob POLYAGENT_ENABLE_CURSOR) e capazes do que a tool exige — nunca sugerir uma engine
+ * que a resolução daquela tool recusaria em seguida. `has`/`cursorEnabled`/`sandboxOn` injetados
+ * para teste, mesmo padrão de resolveTier.
+ */
+export function quotaCandidates(
+  tool: BridgeTool | undefined,
+  exhausted: Engine,
+  has: (e: Engine) => boolean = hasEngine,
+  cursorEnabled: boolean = CURSOR_ENABLED,
+  sandboxOn: boolean = SANDBOX_ON,
+): Engine[] {
+  // generate_image é codex-only: o image_gen embutido só existe lá, então não há alternativa.
+  if (tool === "generate_image") return [];
+  const req = tool === undefined
+    ? undefined
+    : (AUX_TOOL_REQUIREMENTS as Partial<Record<BridgeTool, { readOnly: boolean; webSearch: boolean }>>)[tool];
+  return ENGINES.filter((engine) => {
+    if (engine === exhausted || !has(engine)) return false;
+    if (engine === "cursor" && !cursorEnabled) return false;
+    if (!req) return true;
+    const cap = ENGINE_CAPABILITIES[engine];
+    if (req.webSearch && !cap.webSearch) return false;
+    if (req.readOnly && !cap.engineReadOnly && !sandboxOn) return false;
+    return true;
+  });
+}
+
+/** Menor nível do delegate (1-5) cuja engine primária está entre as candidatas. */
+function lowestLevelFor(candidates: Engine[]): number | undefined {
+  for (const level of Object.keys(TIERS).map(Number).sort((a, b) => a - b)) {
+    if (candidates.includes(TIERS[level].primary.engine)) return level;
+  }
+  return undefined;
+}
+
+/**
+ * Erro acionável: nomeia a engine que estourou, as que sobraram e COMO trocar — a sugestão segue a
+ * superfície da tool (parâmetro `engine` nas auxiliares, `level` no delegate, nenhum onde a tool
+ * escolhe sozinha). Rate limit não sugere troca nenhuma: é espera, não engine errada. Função pura.
+ */
+export function quotaErrorMessage(
+  kind: QuotaErrorKind,
+  engine: Engine,
+  tool: BridgeTool | undefined,
+  candidates: Engine[],
+): string {
+  if (kind === "rate_limited") {
+    return `${engine} rate limited — this is a transient throttle, not an exhausted plan quota: ` +
+      "wait and retry the same engine. Switching engines does not help here.";
+  }
+  if (candidates.length === 0) {
+    return `${engine} quota exhausted — no other engine is available for ${tool ?? "this tool"} ` +
+      "(installed, enabled and capable of what this tool requires). " +
+      `Top up or switch plans on ${engine}, or install another CLI.`;
+  }
+
+  const head = `${engine} quota exhausted — available engines: ${candidates.join(", ")}`;
+  if (tool === "delegate") {
+    const level = lowestLevelFor(candidates);
+    return level === undefined ? head : `${head} — retry with level:${level}`;
+  }
+  if (tool === "follow_up") {
+    return `${head} — follow_up is pinned to the engine of the resumed session; ` +
+      "start a new call on another engine instead of retrying here.";
+  }
+  if (tool === "fast_delegate" || tool === "fan_out" || tool === "generate_image") {
+    return `${head} — this tool picks the engine itself and exposes no engine parameter.`;
+  }
+  // Sem tool declarada não há superfície conhecida para sugerir — nomeia as engines e para por aí.
+  return tool === undefined ? head : `${head} — retry with engine:"${candidates[0]}"`;
+}
+
 /** Cria os dirs efêmeros e sonda os paths existentes pra montar o SandboxSpec. */
 export function buildSandboxSpec(
   workspace: string,
@@ -468,6 +757,11 @@ export interface RunOpts {
    * Resolvida no host por resolveAgent (src/agents.ts). Cross-engine — não é exclusiva do claude.
    */
   agentPrompt?: string;
+  /**
+   * Tool que originou o run. Não muda a execução: define a forma da sugestão no erro de cota
+   * (parâmetro `engine` nas auxiliares, `level` no delegate, nenhuma onde a tool escolhe sozinha).
+   */
+  tool?: BridgeTool;
 }
 
 /**
@@ -896,10 +1190,26 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
   };
 
   const engine = opts.engine ?? "cursor";
+  /**
+   * Converte a falha crua em erro acionável quando a causa é cota/rate limit. Distinto de
+   * isCodexEnvError de propósito: só a falha de AMBIENTE entra no FALLBACK_ENGINE_ORDER automático;
+   * cota nunca retenta sozinha — quem decide a troca (e gasta a próxima assinatura) é o usuário.
+   */
+  const asQuotaError = (err: unknown, failedEngine: Engine): unknown => {
+    if (!(err instanceof ProcessError)) return err;
+    const kind = classifyQuotaError(
+      { stdout: err.stdout, stderr: err.stderr, exitCode: err.exitCode },
+      failedEngine,
+    );
+    if (!kind) return err;
+    const candidates = quotaCandidates(opts.tool, failedEngine);
+    return new QuotaError(kind, failedEngine, quotaErrorMessage(kind, failedEngine, opts.tool, candidates));
+  };
+
   return runOnce(opts).catch((originalError: unknown) => {
     const message = originalError instanceof Error ? originalError.message : String(originalError);
     if (engine !== "codex" || !message.startsWith("codex agent exited ") || !isCodexEnvError(message)) {
-      throw originalError;
+      throw asQuotaError(originalError, engine);
     }
 
     const candidates: Engine[] = [
@@ -909,7 +1219,9 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
     const fallback = candidates.find((candidate) => hasEngine(candidate));
     if (!fallback) throw originalError;
 
-    return runOnce(fallbackOpts(opts, fallback)).then((result) => ({
+    return runOnce(fallbackOpts(opts, fallback)).catch((fallbackError: unknown) => {
+      throw asQuotaError(fallbackError, fallback);
+    }).then((result) => ({
       ...result,
       text: result.text +
         `\n\n[note: codex unavailable (environment issue — missing CODEX_HOME or read-only app-server init) — retried on ${fallback} with its default model]`,

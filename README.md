@@ -29,6 +29,18 @@ Worker tools accept `cwd`, `model`, and `effort` where applicable. `delegate` re
 (1-5); `fast_delegate` has none and picks the fastest healthy engine. Explicit `model`/`effort`
 values override the selected tier.
 
+### When an engine runs out of quota
+
+A call that fails because the engine's plan quota is exhausted does **not** silently retry on
+another engine — spending the next subscription is your decision. The call fails with an actionable
+error naming the engines still available (installed, enabled, and capable of what that tool needs)
+and how to switch: `engine:"<x>"` on the four auxiliary tools, the lowest still-usable `level:<n>`
+on `delegate`. Tools that pick the engine themselves (`fast_delegate`, `fan_out`, `generate_image`)
+and `follow_up` (pinned to the resumed session's engine) report the quota without suggesting a
+parameter. A transient rate limit is reported separately and asks you to wait, since switching
+engines would not help. Anything the classifier does not recognize — an expired login, for one —
+propagates as the raw CLI failure instead of being guessed at.
+
 ## Requirements
 
 - Node ≥ 18

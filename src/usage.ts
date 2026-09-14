@@ -14,8 +14,11 @@ export interface UsageEntry {
   matchedRequest?: boolean;
   /** Engine que rodou a chamada (ex. "codex"|"grok"|"claude"|"cursor"). Usado por computeEngineHealth. */
   engine?: string;
-  /** Resultado da chamada. Usado por computeEngineHealth para medir falha/timeout. */
-  outcome?: "success" | "failure" | "timeout";
+  /**
+   * Resultado da chamada. "quota" é um outcome PRÓPRIO (cota esgotada/rate limit), deliberadamente
+   * fora de failure/timeout: a engine não quebrou, o plano acabou — e computeEngineHealth o ignora.
+   */
+  outcome?: "success" | "failure" | "timeout" | "quota";
   /** Duração do run em ms. Usado por computeEngineHealth para penalizar latência alta. */
   durationMs?: number;
 }
@@ -40,11 +43,14 @@ export interface UsageRun {
 }
 
 /**
- * Classifica o erro rejeitado por runCursor. Timeout vem do setTimeout em cli.ts, que mata o
- * child com SIGKILL e rejeita com `<engine> agent timed out after <ms>ms: ...`. Qualquer outro
- * erro (exit ≠ 0, spawn fail) é "failure". Função pura.
+ * Classifica o erro rejeitado por runCursor. Cota/rate limit vem como QuotaError (src/cli.ts) e
+ * ganha outcome próprio — reconhecido pelo `name` em vez de import, para usage.ts seguir sem
+ * depender do módulo que spawna processo. Timeout vem do setTimeout em cli.ts, que mata o child
+ * com SIGKILL e rejeita com `<engine> agent timed out after <ms>ms: ...`. Qualquer outro erro
+ * (exit ≠ 0, spawn fail) é "failure". Função pura.
  */
-export function classifyOutcome(error: unknown): "failure" | "timeout" {
+export function classifyOutcome(error: unknown): "failure" | "timeout" | "quota" {
+  if (error instanceof Error && error.name === "QuotaError") return "quota";
   const msg = error instanceof Error ? error.message : String(error ?? "");
   return /agent timed out after \d+ms/.test(msg) ? "timeout" : "failure";
 }
@@ -124,6 +130,9 @@ export function computeEngineHealth(
   const byEngine: Record<string, { weight: number; weightedScore: number }> = {};
   for (const r of records) {
     if (!r.engine) continue;
+    // Cota é ignorada EXPLICITAMENTE: sem isso ela cairia no ramo "não é failure/timeout" logo
+    // abaixo e pontuaria 1, inflando o health justamente da engine que não pode mais ser usada.
+    if (r.outcome === "quota") continue;
     const age = now - r.ts;
     if (age < 0 || age > windowMs) continue;
     const weight = Math.pow(0.5, age / halfLife);

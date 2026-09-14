@@ -156,10 +156,24 @@ points, all in `cli.ts`:
   `[note: codex unavailable ...]` suffix to the result. This is host-agnostic by design — it isn't an
   orca-specific patch, since any host that mismanages `CODEX_HOME` hits the same failure. Non-env
   codex errors (auth, rate limit, bad prompt) are NOT retried — they propagate as-is.
-  🔄 [US-006] Cota esgotada e rate limit continuam **sem retry automático** — só a falha de ambiente
-  cai no `FALLBACK_ENGINE_ORDER`. O que muda é que deixam de propagar crus: `classifyQuotaError`
-  ({stdout, stderr, exitCode}, engine) os classifica e a chamada falha com erro acionável nomeando os
-  engines disponíveis, distinguindo `quota_exhausted` (trocar de engine) de `rate_limited` (esperar).
+  Cota esgotada e rate limit continuam **sem retry automático** — só a falha de ambiente cai no
+  `FALLBACK_ENGINE_ORDER`. Mas não propagam mais crus: `classifyQuotaError({stdout, stderr,
+  exitCode}, engine)` lê primeiro os campos JSON estruturados de **stdout** (é lá que o sinal vive) e
+  só depois aplica regex sobre as mensagens extraídas, devolvendo `quota_exhausted` | `rate_limited`
+  | `null`. `runCursor` converte o acerto em `QuotaError` com mensagem acionável — `quotaCandidates`
+  monta a lista de engines instaladas, habilitadas (`CURSOR_ENABLED`) e capazes do que a tool exige
+  (intersecção com `AUX_TOOL_REQUIREMENTS`/`ENGINE_CAPABILITIES`), e `quotaErrorMessage` escolhe a
+  forma da sugestão pela superfície da tool: `engine:"<x>"` nas quatro auxiliares, `level:<n>` (menor
+  nível cuja engine primária sobrou) no `delegate`, nenhuma em `fast_delegate`/`fan_out`/
+  `generate_image`, e "presa à sessão" em `follow_up`. É por isso que `RunOpts.tool` existe: ela não
+  muda a execução, só a forma do erro. `rate_limited` pede espera e **nunca** sugere troca de engine.
+  Um padrão que não casa devolve `null` e a falha propaga crua — classificar errado é pior que não
+  classificar: o `ralph.sh` tratou `OAuth session expired` como cota e mascarou um bug do bridge que
+  queimava a credencial do usuário (ADENDO 3 do spike). Fonte dos padrões, com origem e confiança
+  declaradas por engine: `.ralph/mcp-bridge-v2/spikes/quota-patterns.md`. Só o grok (402 +
+  `Grok Build usage balance exhausted`, com `http_status` aninhado como TEXTO dentro de `errors[0]` —
+  por isso o parser desaninha) e a string de cota do codex foram observados em runtime; os padrões do
+  claude vêm do fonte/doc e seguem sendo hipótese.
 - **`buildSandboxArgs(spec)` is pure and unit-tested** (like `buildCursorArgs`). Bind order is
   load-bearing: `isoHome` mounts the empty `$HOME` **before** the HOME-subpath overlays (auth/
   toolchain), and the `workspace` bind is **last** so it's never shadowed. `buildSandboxSpec(workspace,
@@ -200,9 +214,10 @@ points, all in `cli.ts`:
   `DEFAULT_MODEL` (env `POLYAGENT_MODEL`) applies to the opt-in Cursor path. The current
   cursor-agent rejects `composer-2.5[fast=true]`. `resolveModel` still accepts caller-supplied
   `auto`, but it is not the default.
-- 🔄 [US-006] **Health latency uses the real runtime timeout.** `computeEngineHealth` passa a
-  ignorar explicitamente o outcome próprio de cota, que hoje contaria como sucesso por não ser
-  `failure` nem `timeout` — inflando o health de um engine sem cota.
+- **Health latency uses the real runtime timeout.** `computeEngineHealth` ignora
+  **explicitamente** o outcome `"quota"` (registrado por `classifyOutcome` a partir do `name` da
+  `QuotaError`, sem importar `cli.ts`): sem esse `continue`, cota cairia no ramo "não é failure nem
+  timeout" e pontuaria 1, inflando o health justamente do engine que não pode mais ser usado.
   `computeEngineHealth(records, now, windowMs,
   latencyCeilMs)` retains 300,000ms as its optional-parameter default for backward compatibility,
   but `currentEngineHealth()` passes `DEFAULT_TIMEOUT_MS` (30min by default). The old fixed 5min
