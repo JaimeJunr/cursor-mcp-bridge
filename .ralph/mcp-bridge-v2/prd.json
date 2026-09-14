@@ -197,7 +197,7 @@
       ],
       "jiraKey": null,
       "repo": null,
-      "passes": false,
+      "passes": true,
       "notes": "Fonte: prd-update-1.html (tier update, herda full). Spike: spikes/quota-patterns.md (ver ADENDO)."
     }
   ]

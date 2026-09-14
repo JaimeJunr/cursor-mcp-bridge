@@ -99,3 +99,14 @@ Started: dom 13 set 2026 22:32:27 -03
   - Serializar tdr-runner (muta a árvore) e qa-reviewer (lê a árvore) funcionou — o reviewer viu árvore limpa, sem o falso "worktree sujo" registrado na US-004.
   - Resolution: nenhuma ambiguidade bloqueante — ACs explícitos, spike com padrões e adendos como fonte de verdade, CLAUDE.md do projeto seguido.
 ---
+
+## 2026-09-14 - US-007
+- git mv hooks/prefer-cursor-bridge.mjs → hooks/prefer-polyagent.mjs; todas as strings de prosa ("cursor-bridge available:", "cursor-bridge MCP...", JSDoc do topo) e os ids de tool nos ToolSearch selects (mcp__cursor-bridge__* → mcp__polyagent__*) atualizados no arquivo novo. CURSOR_BRIDGE_MARKER (constante exportada, valor "<cursor_bridge_preference>") preservado por compat, como já era o comentário original. seenPath() passou a gerar `polyagent-nudged-<session>` em vez de `cursor-bridge-nudged-<session>`.
+- test/hook.test.ts (import + fileURLToPath) e test/env-rename.test.ts atualizados para o caminho/prefixo novos.
+- README.md e INSTALL.md: caminho do hook nos exemplos de settings.json do host trocado; nota de breaking change adicionada logo junto da tabela de env CURSOR_BRIDGE_*→POLYAGENT_* já existente da US-002 (README.md, seção "Breaking change: env var rename"; INSTALL.md passo 5).
+- CLAUDE.md: bloco 🔄 [US-007] resolvido — seção do hook reescrita no presente citando hooks/prefer-polyagent.mjs, sem mais menção pendente a plan/build. `grep -n "🔄" CLAUDE.md` não retorna mais nada.
+- GATE 1: 284/284 | GATE 2: lint não configurado (n/a) | GATE 3: tsc limpo | GATE 4: coverage não configurado (n/a) | GATE 5: commit 503d31a6ec4d5d99cd5cef8672517b644fef3133 | GATE 6: depth-loop PASS (tdr-runner validated=yes mechanism=genuine — mutação da string mcp__polyagent__ derrubou o teste de sessionStartContext, e renomear o arquivo de volta quebrou o import; qa-reviewer APROVA COM SUGESTÕES, 6/6 ACs, 0 blockers, 1 nota LOW cosmética sobre o descritor "Cursor worker" remanescente em algumas strings de prosa, fora do escopo do AC 2 que só pedia o alias/nomes de tool corretos).
+- Achado LOW não corrigido aqui (cosmético, candidato a limpeza futura): `hooks/prefer-polyagent.mjs` ainda descreve o worker como "Cursor worker" em ~6 strings de prosa (linhas 48/60-61/69/84/95/113), o que contradiz a mesma string algumas linhas depois ("levels 2-5 escalate across grok/codex/claude"). O AC 2 exigia só o alias novo e os nomes de tool corretos (mcp__polyagent__*), o que está feito; o descritor textual do worker é polimento fora de escopo.
+- Learnings:
+  - Nenhuma ambiguidade — ACs explícitos, seguiu-se o padrão das stories anteriores (US-001/003/004/005/006/008) e o CLAUDE.md do projeto.
+---
