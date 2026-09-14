@@ -11,18 +11,6 @@ context into the caller. The design goal of every tool is **context economy**: `
 `src/index.ts` logs the char count returned to context, because that char count is the real cost
 being optimized.
 
-## ⚠️ Refactor em curso (PRD mcp-bridge-v2)
-
-Há um PRD aprovado em `.ralph/mcp-bridge-v2/prd-update-1.html` (8 user stories) que muda **de
-propósito** vários invariantes descritos abaixo: rebrand para `polyagent-mcp` (US-001), env vars
-`CURSOR_BRIDGE_*` → `POLYAGENT_*` em corte limpo sem alias e `CURSOR_BIN` → `POLYAGENT_CURSOR_BIN`
-(US-002), remoção das tools `plan`/`build` (US-003), engine/modelo por tool auxiliar (US-004), erro
-de processo carregando `{stdout, stderr, exitCode}` separados (US-005), classificação de cota
-esgotada sem retry automático (US-006), hook renomeado (US-007) e bwrap obrigatório (US-008).
-**Se uma tarefa contradiz um invariante marcado abaixo, a tarefa está certa e o CLAUDE.md é que
-está desatualizado** — o texto marcado descreve o estado atual, correto até a implementação
-acontecer. Invariantes NÃO marcados seguem valendo integralmente.
-
 ## Commands
 
 ```bash
