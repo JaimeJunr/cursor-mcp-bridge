@@ -32,6 +32,9 @@ values override the selected tier.
 ## Requirements
 
 - Node ≥ 18
+- `bubblewrap` (`bwrap`) installed — **required**, not recommended: the sandbox is mandatory and the
+  server refuses to start without it (`sudo apt install bubblewrap`). Only `POLYAGENT_SANDBOX=off`
+  waives it, as an explicit operator choice.
 - Codex installed and authenticated for read tools and levels 1/3; Grok for levels 2/4; Claude Code
   for level 5.
 - Optional Cursor fallback: install `cursor-agent` and set `POLYAGENT_ENABLE_CURSOR=1`.
@@ -89,7 +92,7 @@ have their own approval settings — consult the host.
 | `POLYAGENT_MODEL` | `composer-2.5-fast` | Default model for the optional Cursor path. |
 | `POLYAGENT_EXPLORE_MODEL` | `gpt-5.6-luna` | Codex model for `explore`, `read_slice`, `run_filtered`, and `web_lookup` when the call omits `model`. |
 | `POLYAGENT_AGENT_PATHS` | _(off)_ | Additional `:`-separated roots for named agent personas, searched before project/home `.claude/agents` and `~/.claude/plugins`. |
-| `POLYAGENT_SANDBOX` | `bwrap` | Isolates every engine in a bubblewrap sandbox with an empty `$HOME`, preventing global config, MCP servers, hooks, and skills from loading. Only auth, required engine state, and toolchains are bound in. Set `off`/`0` to disable; falls back to unsandboxed if `bwrap` is missing. |
+| `POLYAGENT_SANDBOX` | `bwrap` | Isolates every engine in a bubblewrap sandbox with an empty `$HOME`, preventing global config, MCP servers, hooks, and skills from loading. Only auth, required engine state, and toolchains are bound in. Set `off`/`0` to disable explicitly — with the sandbox off, the read-only tools (`explore`, `read_slice`, `web_lookup`) accept only the codex engine. A missing `bwrap` is a startup error, never a silent downgrade. |
 | `POLYAGENT_FORCE` | _(off)_ | If `1`/`true`, force-enable non-interactive approval for Cursor and Claude runs. |
 | `POLYAGENT_TIMEOUT_MS` | `1800000` (30 min) | Per-call safety-net timeout (not a work budget). Execution tools (`delegate`/`fast_delegate`) also get a prompt note so the worker returns partial results before being killed. |
 | `POLYAGENT_LOG` | _(off)_ | Path to a JSONL file; when set, every call logs `{tool, outChars}` for `bridge_stats`. |

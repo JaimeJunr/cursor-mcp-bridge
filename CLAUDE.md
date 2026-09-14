@@ -169,25 +169,27 @@ points, all in `cli.ts`:
   RW via `POLYAGENT_SANDBOX_EXTRA` (`:`-separated absolute paths); `buildSandboxSpec` keeps only
   the ones that exist and aren't the workspace, and `buildSandboxArgs` binds them **after** the HOME
   overlays but **before** the workspace, so the workspace stays the last (never-shadowed) bind.
-- 🔄 [US-008] **Default-on with graceful fallback.** O fallback gracioso é removido: sem `bwrap` no
-  PATH o server passa a falhar na inicialização nomeando o remédio (`sudo apt install bubblewrap`)
-  em vez de rodar degradado. `POLYAGENT_SANDBOX=off` segue desligando por escolha explícita do
-  operador — e, nesse caso, as tools read-only só aceitam codex.
-  `SANDBOX_ON` is true unless `POLYAGENT_SANDBOX` is
-  `off`/`0`/`false`/`no`/empty. If `bwrap` isn't on PATH, it logs to stderr and runs unsandboxed
-  (never fails the call). The two ephemeral tmp dirs (iso-home, /tmp) are `cleanup()`-ed on
-  close/error/timeout.
+- **Mandatory, with no graceful fallback.** `SANDBOX_ON` is true unless `POLYAGENT_SANDBOX` is
+  `off`/`0`/`false`/`no`/empty. With the sandbox on and `bwrap` missing from PATH, `sandboxPreflight()`
+  (called in `index.ts` right before `server.connect`) throws naming the remedy (installing
+  bubblewrap), so the server never boots degraded; `runOnce` rejects with the same `BWRAP_MISSING`
+  message if the binary disappears after the preflight. There is no stderr-warning path any more — a
+  warning the MCP caller never saw was how a security guarantee got dropped silently.
+  `POLYAGENT_SANDBOX=off` still disables it as an explicit operator choice, and in that case
+  `assertReadOnlyEngine(tool, engine)` refuses any non-codex engine on `explore`/`read_slice`/
+  `web_lookup` (only codex has its own `-s read-only`). The two ephemeral tmp dirs (iso-home, /tmp)
+  are `cleanup()`-ed on close/error/timeout.
 - The spawn boundary stays in `cli.ts` — the sandbox composes `bwrap <args> <engineBin> <engineArgs>`
   in the single `spawn()`; don't spawn `bwrap` from elsewhere.
 
 ### Key invariants (violating these breaks tools or tests)
 
-- 🔄 [US-004, US-008] **Read-only modes are load-bearing for safety.** As três auxiliares deixam de
+- 🔄 [US-004] **Read-only modes are load-bearing for safety.** As três auxiliares deixam de
   ser fixas no codex (engine por env/parâmetro), e por isso a garantia de read-only fora do codex
-  passa a vir do **sandbox bwrap, que vira obrigatório**: no nível do engine `buildGrokArgs` ignora
+  passa a vir do **sandbox bwrap, já obrigatório** (US-008): no nível do engine `buildGrokArgs` ignora
   `mode` e emite sempre `--always-approve`, e no claude `mode` emite `--dangerously-skip-permissions`
-  — o oposto de read-only. A resolução recusa, nomeando o motivo, um engine que não atenda o
-  requisito da tool.
+  — o oposto de read-only. `assertReadOnlyEngine` já recusa, nomeando o motivo, um engine não-codex
+  com o sandbox desligado; a resolução de engine da US-004 se apoia nesse guard.
   `explore`, `read_slice`, and `web_lookup` run on
   codex with `RunOpts.mode`, which `buildCodexArgs` converts to `-s read-only -c
   approval_policy="never"`; `follow_up` takes the same mode to keep a resumed read-only session

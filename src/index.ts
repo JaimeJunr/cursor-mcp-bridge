@@ -6,7 +6,7 @@ import {
   runCursor, EXPLORE_MODEL, IMAGE_MODEL, DEFAULT_TIMEOUT_MS, budgetNote,
   formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, resolveFastTier, FAST_CANDIDATES,
   isDefaultTierEngine, withTerseStyle,
-  raceFirstSuccess, CURSOR_ENABLED,
+  raceFirstSuccess, CURSOR_ENABLED, sandboxPreflight, assertReadOnlyEngine,
   type CliResult, type Engine,
 } from "./cli.js";
 import { resolveAgent } from "./agents.js";
@@ -225,7 +225,9 @@ server.registerTool(
   async ({ question, files, breadth, cwd, model, effort }) => {
     const { prompt, mode } = explorePrompt(question, files, breadth);
     // codex read-only (mode) com o modelo barato de leitura (luna). O worker localiza/mapeia sem editar.
-    return format("explore", await runCursor({ prompt, cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode, agentPrompt: withTerseStyle() }));
+    const engine: Engine = "codex";
+    assertReadOnlyEngine("explore", engine);
+    return format("explore", await runCursor({ prompt, cwd, engine, model: model ?? EXPLORE_MODEL, effort, mode, agentPrompt: withTerseStyle() }));
   },
 );
 
@@ -253,7 +255,9 @@ server.registerTool(
         ].join(" "),
       });
     }
-    return format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask", agentPrompt: withTerseStyle() }));
+    const engine: Engine = "codex";
+    assertReadOnlyEngine("read_slice", engine);
+    return format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine, model: model ?? EXPLORE_MODEL, effort, mode: "ask", agentPrompt: withTerseStyle() }));
   },
 );
 
@@ -283,10 +287,13 @@ server.registerTool(
       "Delegate a web/documentation lookup to the Cursor agent (which has web access): library docs, API references, error messages, current versions. Cheap way to fetch info newer than your training data.",
     inputSchema: { query: z.string().describe("What to look up on the web."), ...routing },
   },
-  async ({ query, cwd, model, effort }) =>
+  async ({ query, cwd, model, effort }) => {
     // codex read-only (mode:'ask' → filesystem intocado) + web:true liga a busca web do codex
     // (-c tools.web_search=true). approval_policy=never evita pendurar em headless.
-    format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask", web: true, agentPrompt: withTerseStyle() })),
+    const engine: Engine = "codex";
+    assertReadOnlyEngine("web_lookup", engine);
+    return format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine, model: model ?? EXPLORE_MODEL, effort, mode: "ask", web: true, agentPrompt: withTerseStyle() }));
+  },
 );
 
 server.registerTool(
@@ -444,6 +451,9 @@ server.registerTool(
     return { content: [{ type: "text" as const, text: lines.join("\n") }] };
   },
 );
+
+// Falha cedo se o sandbox obrigatório não puder ser montado — melhor não subir do que subir degradado.
+sandboxPreflight();
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

@@ -259,6 +259,34 @@ function bwrapPath(): string | null {
   return null;
 }
 
+/** Mensagem única do bwrap ausente — usada no preflight e no runOnce. */
+const BWRAP_MISSING =
+  "polyagent-mcp: bwrap não encontrado no PATH. O sandbox é obrigatório — instale com 'sudo apt install bubblewrap', " +
+  "ou desligue explicitamente com POLYAGENT_SANDBOX=off (nesse caso as tools read-only só aceitam codex).";
+
+/**
+ * Falha cedo (na inicialização do server) se o sandbox está ligado e o bwrap não existe. Antes,
+ * a ausência do binário só virava um aviso em stderr que o chamador MCP nunca via, e o worker
+ * rodava sem isolamento nenhum — degradação silenciosa de uma garantia de segurança.
+ */
+export function sandboxPreflight(sandboxOn = SANDBOX_ON): void {
+  if (sandboxOn && !bwrapPath()) throw new Error(BWRAP_MISSING);
+}
+
+/**
+ * Com o sandbox desligado por escolha do operador, o read-only das tools auxiliares deixa de vir
+ * do `--ro-bind` do bwrap e passa a depender do engine: só o codex tem read-only próprio
+ * (`-s read-only`). Grok ignora `mode` e sempre emite `--always-approve`; claude emite
+ * `--dangerously-skip-permissions`. Por isso, sem sandbox, qualquer engine não-codex é recusado.
+ */
+export function assertReadOnlyEngine(tool: string, engine: Engine, sandboxOn = SANDBOX_ON): void {
+  if (sandboxOn || engine === "codex") return;
+  throw new Error(
+    `${tool} é read-only e o sandbox está desligado (POLYAGENT_SANDBOX=off): engine '${engine}' recusado. ` +
+    "Sem bwrap, só o codex garante read-only próprio (-s read-only) — use engine 'codex' ou religue o sandbox.",
+  );
+}
+
 /** Cria os dirs efêmeros e sonda os paths existentes pra montar o SandboxSpec. */
 export function buildSandboxSpec(
   workspace: string,
@@ -707,9 +735,9 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
       cmd = bwrap;
       args = [...buildSandboxArgs(built.spec), bin, ...engineArgs];
     } else if (SANDBOX_ON) {
-      process.stderr.write(
-        "[cursor-bridge] bwrap não encontrado no PATH — rodando SEM sandbox (config global do user pode vazar). Instale com 'sudo apt install bubblewrap'.\n",
-      );
+      // Sem degradação implícita: o bwrap sumiu do PATH depois do preflight, então a chamada falha.
+      // Rejeita em vez de lançar síncrono — runCursor encadeia .catch() sobre o retorno de runOnce.
+      return Promise.reject(new Error(BWRAP_MISSING));
     }
     if (DEBUG) process.stderr.write(`[cursor-bridge:debug] ${cmd} ${args.map((a) => JSON.stringify(a)).join(" ")}\n`);
 

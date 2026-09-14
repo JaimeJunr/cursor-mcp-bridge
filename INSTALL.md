@@ -19,9 +19,13 @@ opt-in fallback. See [`README.md`](README.md) for the tool list and env vars.
 
 ```bash
 node -v                 # need >= 18
+bwrap --version         # bubblewrap is REQUIRED: the server refuses to start without it
 agent --version         # Cursor CLI must be installed as `agent`
 agent status            # must be authenticated; if not: run `agent login`
 ```
+
+If `bwrap` is missing, install it (`sudo apt install bubblewrap`) — **stop and report**, do not proceed:
+the sandbox is mandatory and startup fails without it.
 
 If `agent` is missing, tell the user to install the Cursor CLI (`curl https://cursor.com/install -fsS | bash`)
 and authenticate — **stop and report**, do not proceed.
