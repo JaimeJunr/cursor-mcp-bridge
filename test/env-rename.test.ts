@@ -12,7 +12,7 @@ const SOURCES = [
   ["src", "usage.ts"],
   ["src", "agents.ts"],
   ["src", "index.ts"],
-  ["hooks", "prefer-cursor-bridge.mjs"],
+  ["hooks", "prefer-polyagent.mjs"],
 ];
 
 /** Tabela de migração da US-002: 16 sufixos + CURSOR_BIN → POLYAGENT_CURSOR_BIN. */
@@ -77,14 +77,14 @@ describe("env var rename CURSOR_BRIDGE_* → POLYAGENT_* (US-002)", () => {
   });
 
   it("o hook lê POLYAGENT_HOOK_MIN_LINES e POLYAGENT_HOOK_MODE", () => {
-    const hook = read("hooks", "prefer-cursor-bridge.mjs");
+    const hook = read("hooks", "prefer-polyagent.mjs");
     expect(hook).toContain("process.env.POLYAGENT_HOOK_MIN_LINES");
     expect(hook).toContain("process.env.POLYAGENT_HOOK_MODE");
   });
 
   it("CURSOR_ENABLED e CURSOR_BRIDGE_MARKER sobrevivem como identificadores (fora da tabela)", () => {
     expect(read("src", "cli.ts")).toMatch(/export const CURSOR_ENABLED\s*=/);
-    expect(read("hooks", "prefer-cursor-bridge.mjs")).toMatch(/export const CURSOR_BRIDGE_MARKER\s*=/);
+    expect(read("hooks", "prefer-polyagent.mjs")).toMatch(/export const CURSOR_BRIDGE_MARKER\s*=/);
   });
 
   it("strings e comentários de usuário não citam mais os nomes antigos", () => {

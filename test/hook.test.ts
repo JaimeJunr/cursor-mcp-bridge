@@ -2,9 +2,9 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 // @ts-expect-error — hook is plain .mjs sem types; só a lógica pura importa aqui.
-import { decide, sessionStartContext, subagentStartContext } from "../hooks/prefer-cursor-bridge.mjs";
+import { decide, sessionStartContext, subagentStartContext } from "../hooks/prefer-polyagent.mjs";
 
-const hookPath = fileURLToPath(new URL("../hooks/prefer-cursor-bridge.mjs", import.meta.url));
+const hookPath = fileURLToPath(new URL("../hooks/prefer-polyagent.mjs", import.meta.url));
 
 /** Roda o hook como processo filho com o env dado; retorna stdout. */
 function runHook(evt: object, env: NodeJS.ProcessEnv = process.env): string {
@@ -99,8 +99,8 @@ describe("sessionStartContext — preload injetado no início da sessão", () =>
   it("instrui rodar ToolSearch com os nomes das tools deferidas", () => {
     const text = sessionStartContext();
     expect(text).toMatch(/ToolSearch/);
-    expect(text).toMatch(/mcp__cursor-bridge__read_slice/);
-    expect(text).toMatch(/mcp__cursor-bridge__explore/);
+    expect(text).toMatch(/mcp__polyagent__read_slice/);
+    expect(text).toMatch(/mcp__polyagent__explore/);
   });
 
   it("cobre o buraco do Bash grep: menciona preferir explore/read_slice sobre Read/Grep", () => {
@@ -188,7 +188,7 @@ describe("decide — Edit/Write (execução self-contained → delegate)", () =>
 });
 
 describe("subagentStartContext — contexto injetado no subagente", () => {
-  it("retorna a preferência cursor-bridge para um subagente comum", () => {
+  it("retorna a preferência polyagent para um subagente comum", () => {
     const text = subagentStartContext("general-purpose");
     expect(text).toMatch(/read_slice|explore|web_lookup/);
     expect(text).toMatch(/ToolSearch/);
@@ -231,6 +231,6 @@ describe("HOOK_MODE=off — no-op total (subprocess)", () => {
       env,
     );
     expect(out.length).toBeGreaterThan(0);
-    expect(out).toMatch(/cursor-bridge|SessionStart|additionalContext/);
+    expect(out).toMatch(/polyagent|SessionStart|additionalContext/);
   });
 });

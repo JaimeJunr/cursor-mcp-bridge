@@ -19,7 +19,7 @@ propósito** vários invariantes descritos abaixo: rebrand para `polyagent-mcp` 
 (US-002), remoção das tools `plan`/`build` (US-003), engine/modelo por tool auxiliar (US-004), erro
 de processo carregando `{stdout, stderr, exitCode}` separados (US-005), classificação de cota
 esgotada sem retry automático (US-006), hook renomeado (US-007) e bwrap obrigatório (US-008).
-**Se uma tarefa contradiz um invariante marcado com 🔄 abaixo, a tarefa está certa e o CLAUDE.md é que
+**Se uma tarefa contradiz um invariante marcado abaixo, a tarefa está certa e o CLAUDE.md é que
 está desatualizado** — o texto marcado descreve o estado atual, correto até a implementação
 acontecer. Invariantes NÃO marcados seguem valendo integralmente.
 
@@ -291,17 +291,14 @@ points, all in `cli.ts`:
   killed blind. Read tools (`explore`, `read_slice`, `run_filtered`, `web_lookup`) do not get it.
   Keep that split.
 
-## The hook (`hooks/prefer-cursor-bridge.mjs`)
-
-🔄 [US-007] O arquivo vira `hooks/prefer-polyagent.mjs` (e `test/hook.test.ts` importa o caminho
-novo); as strings de nudge/redirect passam a citar o alias novo do server e param de mencionar
-`plan`/`build`. O caminho antigo no `settings.json` do host quebra — breaking change documentado
-junto da tabela de env da US-002.
+## The hook (`hooks/prefer-polyagent.mjs`)
 
 Ships separately from the server: a hook the host wires (in its `settings.json`) as a `PreToolUse`
 matcher for `Read|Grep|Glob|WebSearch|WebFetch|Bash|Edit|Write` (main-loop nudges), plus a
 `SessionStart` entry and a `SubagentStart` entry — each pointing at
-`hooks/prefer-cursor-bridge.mjs`. It steers the agent toward the bridge. Env
+`hooks/prefer-polyagent.mjs`. It steers the agent toward the `polyagent` alias and no longer
+references the removed `plan`/`build` tools. Renaming from the old path is a breaking change for
+host `settings.json` entries that still point at it. Env
 `POLYAGENT_HOOK_MODE` = `off` | `nudge` | `redirect` (default **`redirect`**): `off` does
 nothing; `nudge` is the old non-blocking `additionalContext` behavior; `redirect` returns
 `permissionDecision: "deny"` (via `denyRedirect()`) for the two safe-to-block cases. On `Bash` it

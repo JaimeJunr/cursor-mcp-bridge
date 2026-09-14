@@ -181,10 +181,14 @@ Report the connection status back to the user.
 ## 5. (Recommended, Claude Code) Make the agent actually use it
 
 Registration alone is not enough — the bridge tools are **deferred** and lose to native
-`Read`/`Grep`/`WebSearch` by default. Wire the shipped hook (`hooks/prefer-cursor-bridge.mjs`)
+`Read`/`Grep`/`WebSearch` by default. Wire the shipped hook (`hooks/prefer-polyagent.mjs`)
 into `settings.json` for `PreToolUse`, `SessionStart`, and `SubagentStart`. The exact JSON blocks
 and the reasoning are in [`README.md` → "Make the agent actually use it"](README.md#make-the-agent-actually-use-it).
 Do this step only for Claude Code; other hosts do not run these hooks.
+
+> **Breaking change (US-007):** The hook was renamed from
+> `hooks/prefer-cursor-bridge.mjs` to `hooks/prefer-polyagent.mjs`. Update any host
+> `settings.json` entry that points to the old path.
 
 ## Done — report to the user
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * PreToolUse hook — nudges the agent toward cursor-mcp-bridge instead of the
+ * PreToolUse hook — nudges the agent toward polyagent instead of the
  * token-expensive native tools, at the moment of the call (text alone in
  * CLAUDE.md loses to structural friction; a call-time reminder wins).
  *
@@ -39,13 +39,13 @@ const BIG_BYTES = 2 * 1024 * 1024; // acima disto não conta linhas — já é "
 const SKIP_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|wasm|mp4|mov|woff2?)$/i;
 
 const PRELOAD_TEXT =
-  "cursor-bridge tools are DEFERRED — run ToolSearch(\"select:mcp__cursor-bridge__read_slice," +
-  "mcp__cursor-bridge__explore,mcp__cursor-bridge__run_filtered,mcp__cursor-bridge__web_lookup\") " +
+  "polyagent tools are DEFERRED — run ToolSearch(\"select:mcp__polyagent__read_slice," +
+  "mcp__polyagent__explore,mcp__polyagent__run_filtered,mcp__polyagent__web_lookup\") " +
   "ONCE this session so their schemas load; otherwise the always-loaded native Read/Grep/Glob win by " +
   "default. For pure reading/locating (no edit ahead), prefer explore/read_slice over Grep/Read.";
 
 const WEB_TEXT =
-  "cursor-bridge available: prefer web_lookup(query) over native web tools — the Cursor agent reads the " +
+  "polyagent available: prefer web_lookup(query) over native web tools — the Cursor agent reads the " +
   "pages and returns summary+links instead of dumping raw results into your context. Skip only if you " +
   "need the raw HTML/DOM to parse.";
 
@@ -56,7 +56,7 @@ const BASH_MUTATE_RE =
   /\b(git\s+commit|git\s+push|git\s+worktree\s+add|gh\s+pr\s+create|gh\s+issue\s+create|bkt\s+pr\s+create)\b/;
 
 const BASH_MUTATE_TEXT =
-  "cursor-bridge available: writing commits/PRs/tickets/branches is cheap grunt-work — hand it to " +
+  "polyagent available: writing commits/PRs/tickets/branches is cheap grunt-work — hand it to " +
   "delegate(prompt) (the Cursor worker runs git/gh/bkt with full tool access) instead of spending " +
   "expensive orchestrator tokens. You stay the orchestrator; Cursor does the mechanical work.";
 
@@ -64,7 +64,7 @@ const BASH_MUTATE_TEXT =
 // tarefa self-contained pode ir INTEIRA pro delegate(prompt, level) em vez de gastar tokens
 // caros de orquestrador. Não desencoraja editar — só reposiciona: delegar execução é o default.
 const EDIT_DELEGATE_TEXT =
-  "cursor-bridge available: if this edit is part of a self-contained task (a feature, a bugfix, a " +
+  "polyagent available: if this edit is part of a self-contained task (a feature, a bugfix, a " +
   "mechanical change across files, or running/fixing a build), hand the WHOLE task to " +
   "delegate(prompt, level) — the Cursor worker has full read/edit/shell access in cwd and runs cheap " +
   "(level 1 = GPT-5.6 Luna max on codex; levels 2-5 escalate across grok/codex/claude) — instead of implementing " +
@@ -77,14 +77,14 @@ const EDIT_DELEGATE_TEXT =
  * que não casa com nenhum matcher, então o preload nunca chegava. Injetar no início
  * da sessão fecha esse buraco: o lembrete existe ANTES da primeira decisão de tool,
  * independente de o modelo usar Bash grep ou a tool nativa.
- * @example sessionStartContext() // → "cursor-bridge MCP ... Run ToolSearch(...) ONCE ..."
+ * @example sessionStartContext() // → "polyagent MCP ... Run ToolSearch(...) ONCE ..."
  */
 export function sessionStartContext() {
   return (
-    "cursor-bridge MCP (cheap/fast Cursor worker) is available but its tools are DEFERRED — they are NOT " +
+    "polyagent MCP (cheap/fast Cursor worker) is available but its tools are DEFERRED — they are NOT " +
     "in your prompt and fail if called raw. Run " +
-    'ToolSearch("select:mcp__cursor-bridge__read_slice,mcp__cursor-bridge__explore,' +
-    'mcp__cursor-bridge__run_filtered,mcp__cursor-bridge__web_lookup,mcp__cursor-bridge__delegate") ' +
+    'ToolSearch("select:mcp__polyagent__read_slice,mcp__polyagent__explore,' +
+    'mcp__polyagent__run_filtered,mcp__polyagent__web_lookup,mcp__polyagent__delegate") ' +
     "ONCE now so their schemas load; otherwise the always-loaded native Read/Grep/Bash/Edit/Write win by " +
     "default and you burn expensive tokens on cheap work. For PURE reading/locating/web with no edit ahead, " +
     "prefer explore/read_slice/run_filtered/web_lookup over Read, Grep, or Bash grep. " +
@@ -104,25 +104,25 @@ export function sessionStartContext() {
   );
 }
 
-// ---- Contexto do SubagentStart: ensina os subagentes sobre cursor-bridge ----
+// ---- Contexto do SubagentStart: ensina os subagentes sobre polyagent ----
 
 /** Marcador mantido para compatibilidade com consumidores externos. */
 export const CURSOR_BRIDGE_MARKER = "<cursor_bridge_preference>";
 
 const AGENT_PREF_BODY =
-  "cursor-bridge MCP is available to you (a subagent) — the cheap/fast Cursor worker. For PURE " +
+  "polyagent MCP is available to you (a subagent) — the cheap/fast Cursor worker. For PURE " +
   "reading/locating/web where you will NOT edit the file, prefer it over native Read/Grep/Glob/" +
   "WebSearch/WebFetch: explore(question,files?) to map or answer, read_slice(files,want) for one " +
   "section of a large file, run_filtered(command,want) to strip noisy build/test output, " +
   "web_lookup(query) for docs/errors/versions. These tools are DEFERRED — run " +
-  'ToolSearch("select:mcp__cursor-bridge__read_slice,mcp__cursor-bridge__explore,' +
-  'mcp__cursor-bridge__run_filtered,mcp__cursor-bridge__web_lookup") ONCE before exploring so their ' +
+  'ToolSearch("select:mcp__polyagent__read_slice,mcp__polyagent__explore,' +
+  'mcp__polyagent__run_filtered,mcp__polyagent__web_lookup") ONCE before exploring so their ' +
   "schemas load. If you WILL edit a file, native Read is correct. This complements the context-mode " +
   "routing above — both keep raw output out of your context; when both fit, either is fine.";
 
 // Reforço só para o subagente Explore: ele foi spawnado no modelo caro do orquestrador
 // (o Explore herda o modelo da sessão, capado em Opus), então empurra TODO o trabalho de
-// leitura pro cursor-bridge, que roda no Codex Luna barato — o shell caro só orquestra.
+// leitura pro polyagent, que roda no Codex Luna barato — o shell caro só orquestra.
 const EXPLORE_EXTRA =
   " You are an Explore run spawned on the orchestrator's expensive model: do ALL file reading and " +
   "locating via explore(question)/read_slice(files,want), which run on Codex Luna (cheap) " +
@@ -208,7 +208,7 @@ function baseDecision(input, { stat, read, minLines }, seen) {
       key,
       redirect: true,
       text:
-        `cursor-bridge available: ${file} is a ${shown} file. If you will NOT Edit it, use ` +
+        `polyagent available: ${file} is a ${shown} file. If you will NOT Edit it, use ` +
         `read_slice(files, want) to load only the needed lines instead of Read (which puts the whole ` +
         `file in context, re-billed every turn). If you will Edit it, native Read is correct.`,
     };
@@ -221,7 +221,7 @@ function baseDecision(input, { stat, read, minLines }, seen) {
 
 function seenPath(sessionId) {
   const safe = String(sessionId).replace(/[^a-zA-Z0-9_-]/g, "_");
-  return join(tmpdir(), `cursor-bridge-nudged-${safe}.json`);
+  return join(tmpdir(), `polyagent-nudged-${safe}.json`);
 }
 
 function loadSeen(p) {
@@ -249,7 +249,7 @@ function nudge(text) {
 }
 
 const FAILOPEN_SUFFIX =
-  " — If that cursor-bridge tool isn't loaded yet, run the ToolSearch preload first; if you genuinely need this native tool's raw result, just call it again and it will be allowed (this redirect fires only once).";
+  " — If that polyagent tool isn't loaded yet, run the ToolSearch preload first; if you genuinely need this native tool's raw result, just call it again and it will be allowed (this redirect fires only once).";
 
 function denyRedirect(reason) {
   process.stdout.write(

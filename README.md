@@ -161,11 +161,15 @@ eagerly; secondary tools stay deferred. Four fixes, strongest first:
 **1. Call-time hook (recommended).** A `PreToolUse` hook that steers the agent toward
 the bridge at the moment it reaches for a native tool — text in a config file loses under
 pressure, a call-time reminder does not. This repo ships one at
-[`hooks/prefer-cursor-bridge.mjs`](hooks/prefer-cursor-bridge.mjs): it runs on `node`
+[`hooks/prefer-polyagent.mjs`](hooks/prefer-polyagent.mjs): it runs on `node`
 (already required) and only fires where it pays. Default mode is **`redirect`**
 (`POLYAGENT_HOOK_MODE=redirect`): for the two safe-to-block cases it returns
 `permissionDecision: "deny"` once and names the bridge tool; other cases stay non-blocking
 nudges. Wire it into your host's settings (Claude Code `settings.json`):
+
+> **Breaking change (US-007):** The hook file was renamed from
+> `hooks/prefer-cursor-bridge.mjs` to `hooks/prefer-polyagent.mjs`. Update any host
+> `settings.json` entry that points to the old path.
 
 ```json
 {
@@ -174,7 +178,7 @@ nudges. Wire it into your host's settings (Claude Code `settings.json`):
       {
         "matcher": "Read|Grep|Glob|WebSearch|WebFetch|Bash|Edit|Write|MultiEdit",
         "hooks": [
-          { "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-cursor-bridge.mjs", "timeout": 5 }
+          { "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-polyagent.mjs", "timeout": 5 }
         ]
       }
     ]
@@ -210,7 +214,7 @@ redirect is one-shot and fail-open (a second identical call is allowed through).
 
 Set `POLYAGENT_HOOK_MODE=nudge` for the old non-blocking behavior, or `off` to disable.
 To reset the dedup and see the fires again, start a new session (or delete
-`cursor-bridge-nudged-<session_id>.json` from your OS temp dir — `os.tmpdir()`,
+`polyagent-nudged-<session_id>.json` from your OS temp dir — `os.tmpdir()`,
 e.g. `/tmp` on Linux, not necessarily `$TMPDIR`).
 
 ### Preloading at session start (`SessionStart`)
@@ -225,7 +229,7 @@ regardless of how the agent searches.
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-cursor-bridge.mjs", "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-polyagent.mjs", "timeout": 5 }] }
     ]
   }
 }
@@ -245,7 +249,7 @@ so wire the same hook for `SubagentStart` as well:
     "SubagentStart": [
       {
         "hooks": [
-          { "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-cursor-bridge.mjs" }
+          { "type": "command", "command": "node /abs/path/to/cursor-mcp-bridge/hooks/prefer-polyagent.mjs" }
         ]
       }
     ]
@@ -253,7 +257,7 @@ so wire the same hook for `SubagentStart` as well:
 }
 ```
 
-On `SubagentStart` the hook injects a compact cursor-bridge preference into every
+On `SubagentStart` the hook injects a compact polyagent preference into every
 spawned subagent via `additionalContext` (`subagentStartContext(agent_type)`).
 When `agent_type` is `Explore` it appends an extra line: that Explore run was spawned on the
 orchestrator's expensive model (Explore inherits the session model, capped at Opus), so it should
@@ -279,7 +283,7 @@ their schemas are loaded if the host still defers them.
 
 ```
 The host rule "prefer dedicated file/search tools" applies to the EDIT path (Edit needs the
-file content → native Read). For PURE reading/locating/web (no edit), cursor-bridge takes
+file content → native Read). For PURE reading/locating/web (no edit), polyagent takes
 precedence over native Read/Grep/Glob/WebSearch/WebFetch. Read a large file whole with native
 Read ONLY when you are about to edit it.
 ```
