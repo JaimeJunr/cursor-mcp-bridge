@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="prd-tier" content="full">
+<meta name="prd-previous-file" content="">
+<meta name="prd-approved" content="true">
+<title>polyagent-mcp — rebrand, poda e independência de engine</title>
+<style>
+:root {
+  --background:#FFFFFF; --foreground:#18181B; --card:#FFFFFF; --soft:#FAFAFA;
+  --accent:#ECFEFF; --accent-foreground:#18181B;
+  --primary:#3B8091; --primary-foreground:#FAFAFA; --secondary:#F4F4F5;
+  --muted-foreground:#71717A; --border:#E4E4E7; --input:#E4E4E7; --ring:#3F3F46;
+  --destructive:#DC2626; --destructive-foreground:#FEF2F2;
+  --positive:#16A34A; --positive-foreground:#F0FDF4;
+  --warning:#EA580C; --warning-foreground:#FFF7ED;
+  --info:#2563EB; --info-foreground:#EFF6FF;
+  --content-high:#0F172A; --content-medium:#334155;
+  --chart-1:#2a9d90; --chart-2:#E76E50; --chart-3:#274754; --chart-4:#e8c468; --chart-5:#f4a462;
+  --page-bg:#EEF2F6;
+  --radius-sm:6px; --radius-md:10px; --radius-lg:14px;
+  --tint-purple:#7c3aed; --tint-purple-bg:#f1ebfc; --tint-info-border:#bfdbfe; --tint-info-fg:#1e3a5f;
+  --tint-danger-border:#fecaca; --tint-danger-fg:#7f1d1d; --tint-primary-border:#a5eef0; --tint-primary-fg:#134e4a;
+  --tint-warning-border:#f3ceb2; --tint-warning-fg:#9a3f12;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+html, body { height:100%; }
+body { background:var(--page-bg); color:var(--foreground); font-family:'Lato',-apple-system,'Segoe UI',sans-serif; font-size:16px; line-height:1.6; }
+.mono { font-family:'IBM Plex Mono',ui-monospace,monospace; }
+.shell { display:grid; grid-template-columns:248px minmax(0,760px); gap:32px; max-width:1100px; margin:0 auto; padding:40px 24px 96px; align-items:start; }
+.sidebar { position:sticky; top:24px; display:flex; flex-direction:column; gap:20px; }
+.brandmark { display:flex; align-items:center; gap:10px; }
+.brandmark .sq { width:28px; height:28px; border-radius:var(--radius-sm); background:var(--primary); color:var(--primary-foreground); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:14.5px; }
+.brandmark .eyebrow { font-size:12.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted-foreground); font-weight:700; }
+.tier-badge { display:inline-flex; align-items:center; gap:6px; align-self:flex-start; padding:4px 11px; border-radius:999px; background:var(--primary); color:var(--primary-foreground); font-size:13px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; }
+nav.toc { display:flex; flex-direction:column; gap:2px; padding:12px 0; border-top:1px solid var(--border); border-bottom:1px solid var(--border); }
+nav.toc a { display:flex; align-items:center; gap:10px; padding:7px 8px; border-radius:var(--radius-sm); color:var(--content-medium); font-size:14.5px; font-weight:600; text-decoration:none; border-left:2px solid transparent; }
+nav.toc a:hover, nav.toc a:focus-visible { background:var(--accent); color:var(--primary); border-left-color:var(--primary); }
+nav.toc a:focus-visible { outline:2px solid var(--ring); outline-offset:-2px; }
+nav.toc a .mark { width:18px; height:18px; border-radius:5px; background:var(--accent); color:var(--primary); display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; flex-shrink:0; }
+.stat-stack { display:flex; flex-direction:column; gap:8px; }
+.stat-card { padding:11px 12px; background:var(--card); border:1px solid var(--border); border-radius:var(--radius-md); }
+.stat-card .label { font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted-foreground); font-weight:700; }
+.stat-card .value { font-variant-numeric:tabular-nums; font-size:22px; font-weight:800; color:var(--content-high); margin-top:2px; }
+.stat-card .sub { font-size:13px; color:var(--muted-foreground); margin-top:1px; }
+.bar { display:flex; gap:3px; margin-top:8px; height:6px; }
+.bar i { flex:1; border-radius:3px; background:var(--border); display:block; }
+.bar i.on { background:var(--positive); }
+.bar i.off { background:var(--destructive); }
+.approval-pill { display:flex; align-items:center; gap:8px; padding:9px 12px; border-radius:var(--radius-md); background:var(--warning-foreground); border:1px solid var(--tint-warning-border); }
+.approval-pill .dot { width:8px; height:8px; border-radius:50%; background:var(--warning); flex-shrink:0; }
+.approval-pill span.txt { font-size:14px; font-weight:700; color:var(--tint-warning-fg); }
+.timebox { display:flex; gap:8px; align-items:flex-start; padding:10px 12px; border-radius:var(--radius-md); background:var(--soft); border:1px solid var(--border); font-size:13.5px; color:var(--content-medium); }
+.timebox .ico { flex-shrink:0; color:var(--muted-foreground); font-weight:800; }
+main { display:flex; flex-direction:column; gap:24px; min-width:0; }
+.doc-header h1 { font-size:30px; font-weight:800; color:var(--content-high); letter-spacing:-.01em; text-wrap:balance; }
+.doc-header p.dek { margin-top:6px; font-size:15.5px; color:var(--muted-foreground); max-width:62ch; }
+.card { background:var(--card); border:1px solid var(--border); border-top:3px solid var(--primary); border-radius:var(--radius-lg); padding:24px; }
+.section-head { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
+.section-head .letter { width:34px; height:34px; border-radius:var(--radius-sm); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:17px; flex-shrink:0; background:var(--accent); color:var(--primary); }
+.section-head h2 { font-size:19px; font-weight:800; color:var(--content-high); }
+.section-head .count { margin-left:auto; font-size:13px; color:var(--muted-foreground); font-variant-numeric:tabular-nums; }
+.card > .body { max-width:66ch; color:var(--content-medium); }
+.card h3 { font-size:14px; font-weight:800; letter-spacing:.03em; text-transform:uppercase; color:var(--muted-foreground); margin:18px 0 8px; }
+.card h3:first-of-type { margin-top:16px; }
+.chip-row { display:flex; flex-wrap:wrap; gap:8px; }
+.chip { display:inline-flex; align-items:center; gap:6px; padding:5px 10px; border-radius:999px; background:var(--secondary); color:var(--content-medium); font-size:13.5px; font-weight:600; }
+.user-story { border:1px solid var(--border); border-radius:var(--radius-md); padding:14px 16px; margin:0 0 10px; background:var(--soft); }
+.user-story:last-child { margin-bottom:0; }
+.us-head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px; }
+.us-id { font-size:12.5px; font-weight:800; padding:3px 8px; border-radius:6px; background:var(--content-high); color:var(--primary-foreground); letter-spacing:.02em; }
+.badge { display:inline-flex; align-items:center; gap:5px; font-size:12.5px; font-weight:700; padding:3px 9px; border-radius:999px; letter-spacing:.01em; }
+.badge .dot { width:6px; height:6px; border-radius:50%; }
+.badge-ready { background:var(--positive-foreground); color:var(--positive); }
+.badge-ready .dot { background:var(--positive); }
+.badge-blocked { background:var(--warning-foreground); color:var(--warning); }
+.badge-blocked .dot { background:var(--warning); }
+.badge-repo { background:var(--secondary); color:var(--muted-foreground); font-weight:600; }
+.user-story > p.story-text { font-size:15.5px; color:var(--content-high); font-weight:600; margin-bottom:8px; }
+.user-story .ac { list-style:none; display:flex; flex-direction:column; gap:5px; }
+.user-story .ac li { display:flex; gap:8px; font-size:14px; color:var(--content-medium); align-items:flex-start; }
+.user-story .ac li::before { content:"\2713"; color:var(--positive); font-weight:800; flex-shrink:0; margin-top:1px; }
+.req-checklist { list-style:none; display:flex; flex-direction:column; gap:6px; margin-top:4px; }
+.rc { display:flex; gap:10px; align-items:flex-start; padding:9px 12px; border-radius:var(--radius-sm); font-size:14.5px; background:var(--soft); border:1px solid var(--border); }
+.rc .mark { flex-shrink:0; width:18px; height:18px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12.5px; font-weight:800; margin-top:1px; }
+.rc-pass .mark { background:var(--positive-foreground); color:var(--positive); }
+.rc-fail .mark { background:var(--destructive-foreground); color:var(--destructive); }
+.rc-pass { color:var(--content-medium); }
+.rc-fail { color:var(--content-high); font-weight:600; }
+.open-questions { list-style:none; display:flex; flex-direction:column; gap:6px; margin-top:4px; }
+.oq { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:0 var(--radius-sm) var(--radius-sm) 0; border-left:3px solid var(--border); background:var(--soft); font-size:14.5px; color:var(--content-medium); }
+.oq .pill { flex-shrink:0; font-family:'IBM Plex Mono',monospace; font-size:11.5px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; padding:2px 7px; border-radius:5px; margin-top:1px; }
+.oq-answered { border-left-color:var(--positive); }
+.oq-answered .pill { background:var(--positive-foreground); color:var(--positive); }
+.oq-po { border-left-color:var(--info); }
+.oq-po .pill { background:var(--info-foreground); color:var(--info); }
+.oq-se { border-left-color:var(--tint-purple); }
+.oq-se .pill { background:var(--tint-purple-bg); color:var(--tint-purple); }
+.oq-parked { border-left-color:var(--warning); }
+.oq-parked .pill { background:var(--warning-foreground); color:var(--warning); }
+.callout { display:flex; gap:10px; padding:13px 15px; border-radius:var(--radius-md); border:1px solid transparent; font-size:14.5px; }
+.callout .ico { flex-shrink:0; width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13.5px; font-weight:800; margin-top:1px; }
+.callout ul { margin:0; padding-left:16px; }
+.callout-assumption { background:var(--info-foreground); border-color:var(--tint-info-border); color:var(--tint-info-fg); }
+.callout-assumption .ico { background:var(--info-foreground); color:var(--info); }
+.callout-risk { background:var(--destructive-foreground); border-color:var(--tint-danger-border); color:var(--tint-danger-fg); }
+.callout-risk .ico { background:var(--destructive-foreground); color:var(--destructive); }
+.callout-decision { background:var(--accent); border-color:var(--tint-primary-border); color:var(--tint-primary-fg); }
+.callout-decision .ico { background:var(--accent); color:var(--primary); }
+.verify-box { background:var(--content-high); color:var(--border); border-radius:var(--radius-md); padding:14px 16px; font-size:14px; font-family:'IBM Plex Mono',monospace; overflow-x:auto; white-space:pre-wrap; }
+@media (max-width:760px) { .shell { grid-template-columns:1fr; } .sidebar { position:static; } }
+</style>
+</head>
+<body>
+<div class="shell">
+
+<aside class="sidebar">
+  <div class="brandmark">
+    <span class="sq">P</span>
+    <div>
+      <div class="eyebrow">/prd &middot; jo&atilde;o-de-barro</div>
+      <span class="tier-badge">Full</span>
+    </div>
+  </div>
+
+  <nav class="toc" aria-label="Navega&ccedil;&atilde;o do PRD">
+    <a href="#contexto"><span class="mark">C</span> Contexto</a>
+    <a href="#requisitos"><span class="mark">R</span> Requisitos</a>
+    <a href="#impacto"><span class="mark">I</span> Impacto</a>
+    <a href="#alinhamento"><span class="mark">A</span> Alinhamento</a>
+  </nav>
+
+  <div class="stat-stack" aria-label="Status do PRD">
+    <div class="stat-card">
+      <div class="label">User Stories</div>
+      <div class="value">8</div>
+      <div class="sub">2 ready &middot; 6 blocked</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Open Questions</div>
+      <div class="value">11</div>
+      <div class="sub">8 answered &middot; 3 parked</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Requirements Checklist</div>
+      <div class="value">7<span style="color:var(--muted-foreground);font-size:14.5px;">/7</span></div>
+      <div class="bar"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></div>
+    </div>
+  </div>
+
+  <div class="approval-pill">
+    <span class="dot"></span>
+    <span class="txt">Draft &mdash; aguardando aprova&ccedil;&atilde;o</span>
+  </div>
+
+  <div class="timebox">
+    <span class="ico">&#9201;</span>
+    <span>Time-box: fecha em 1 sess&atilde;o. Escopo maior que isso = subir de tier.</span>
+  </div>
+</aside>
+
+<main>
+  <div class="doc-header">
+    <h1>polyagent-mcp &mdash; rebrand, poda e independ&ecirc;ncia de engine</h1>
+    <p class="dek">Tirar a identidade Cursor do projeto, remover as tools mortas e desacoplar as tools auxiliares do codex.</p>
+  </div>
+
+  <section class="card" id="contexto">
+    <div class="section-head"><span class="letter">C</span><h2>Contexto</h2></div>
+    <div class="body">
+      <p>O projeto nasceu como ponte para o Cursor CLI, mas virou uma frota multi-engine: codex, grok e claude s&atilde;o os caminhos padr&atilde;o e o Cursor ficou como fallback opt-in atr&aacute;s de <span class="mono">CURSOR_BRIDGE_ENABLE_CURSOR</span>. O nome do pacote, o bin, o nome do server MCP e 17 vari&aacute;veis de ambiente ainda anunciam um vendor que hoje &eacute; a &uacute;ltima op&ccedil;&atilde;o da lista.</p>
+      <p>Em paralelo, o invent&aacute;rio acumulou peso morto: <span class="mono">plan</span> e <span class="mono">build</span> n&atilde;o s&atilde;o usadas. E quatro tools auxiliares t&ecirc;m <span class="mono">engine: "codex"</span> hardcoded em <span class="mono">src/index.ts</span> (228, 256, 275, 289) &mdash; <span class="mono">explore</span>, <span class="mono">read_slice</span> e <span class="mono">web_lookup</span> em modo read-only, e <span class="mono">run_filtered</span> com acesso total via <span class="mono">force: true</span>. A &uacute;nica configura&ccedil;&atilde;o existente &eacute; <span class="mono">CURSOR_BRIDGE_EXPLORE_MODEL</span>: um &uacute;nico <em>model id</em> compartilhado pelas quatro, sem escolha de engine.</p>
+      <p>Cota esgotada no codex derruba as quatro de uma vez, com erro cru do CLI, sem dizer que grok e claude estavam dispon&iacute;veis. O fallback atual (<span class="mono">isCodexEnvError</span> + <span class="mono">FALLBACK_ENGINE_ORDER</span>) cobre s&oacute; falha de ambiente, nunca cota.</p>
+      <p>Ao desacoplar do codex aparece uma trava de seguran&ccedil;a: no n&iacute;vel do engine, s&oacute; o codex tem read-only duro. <span class="mono">buildGrokArgs</span> ignora <span class="mono">mode</span> e emite sempre <span class="mono">--always-approve</span> (<span class="mono">cli.ts:356</span>); no claude, <span class="mono">mode</span> emite <span class="mono">--dangerously-skip-permissions</span> (<span class="mono">cli.ts:425</span>). O read-only engine-agn&oacute;stico vem do bwrap &mdash; que hoje degrada em sil&ecirc;ncio se ausente.</p>
+      <p>O spike <span class="mono">spikes/quota-patterns.md</span> (14/09/2026) mostrou que o obst&aacute;culo &eacute; anterior &agrave; classifica&ccedil;&atilde;o: nos tr&ecirc;s CLIs o erro estruturado sai em <span class="mono">stdout</span>, e <span class="mono">runOnce</span> monta o erro do processo como <span class="mono">stderr.trim() || stdout.trim()</span> (<span class="mono">cli.ts:688-720</span>) &mdash; qualquer conte&uacute;do em stderr descarta o JSON &uacute;til.</p>
+    </div>
+  </section>
+
+  <section class="card" id="requisitos">
+    <div class="section-head"><span class="letter">R</span><h2>Requisitos</h2><span class="count">8 US</span></div>
+
+    <h3>Non-Goals</h3>
+    <div class="chip-row">
+      <span class="chip">Retry autom&aacute;tico de engine em cota esgotada</span>
+      <span class="chip">Remover <span class="mono">fan_out</span> ou <span class="mono">generate_image</span></span>
+      <span class="chip">Alias de compatibilidade das env vars antigas</span>
+      <span class="chip">Mudar os tiers 1-5 do <span class="mono">delegate</span></span>
+      <span class="chip">Publicar no npm ou registrar em marketplace MCP</span>
+      <span class="chip">Renomear o diret&oacute;rio em disco ou o remote git</span>
+      <span class="chip">Migrar para <span class="mono">--output-format stream-json</span></span>
+    </div>
+
+    <h3>User Stories</h3>
+
+    <div class="user-story" id="US-001">
+      <div class="us-head">
+        <span class="us-id">US-001</span>
+        <span class="badge badge-ready"><span class="dot"></span>Ready</span>
+      </div>
+      <p class="story-text">Como mantenedor, quero a identidade p&uacute;blica renomeada para <span class="mono">polyagent-mcp</span>, para que o nome descreva a frota multi-engine em vez de um vendor que virou fallback.</p>
+      <ul class="ac">
+        <li>AC: <span class="mono">package.json</span> e <span class="mono">package-lock.json</span> t&ecirc;m <span class="mono">name: "polyagent-mcp"</span>; <span class="mono">bin</span> mapeia <span class="mono">polyagent-mcp</span>; <span class="mono">description</span> cita codex/grok/claude e p&otilde;e Cursor como fallback opt-in.</li>
+        <li>AC: <span class="mono">new McpServer({ name: "polyagent-mcp" })</span> em <span class="mono">src/index.ts:25</span>.</li>
+        <li>AC: O alias de registro do server no host passa a ser <span class="mono">polyagent</span>, documentado em <span class="mono">INSTALL.md</span> &mdash; &eacute; ele que define o prefixo <span class="mono">mcp__&lt;alias&gt;__*</span> das tools, independente do <span class="mono">McpServer.name</span>.</li>
+        <li>AC: <span class="mono">README.md</span> e <span class="mono">INSTALL.md</span> nomeiam os tr&ecirc;s engines nativos nas 3 primeiras linhas.</li>
+        <li>AC: O nome antigo sobrevive apenas nos comandos de clone do README, onde nomeia o reposit&oacute;rio real (que n&atilde;o &eacute; renomeado &mdash; ver Non-Goals); em qualquer outro contexto, zero ocorr&ecirc;ncias.</li>
+        <li>AC: Typecheck passes (<span class="mono">npm run build</span>).</li>
+      </ul>
+    </div>
+
+    <div class="user-story" id="US-002">
+      <div class="us-head">
+        <span class="us-id">US-002</span>
+        <span class="badge badge-blocked"><span class="dot"></span>Blocked &middot; US-001</span>
+      </div>
+      <p class="story-text">Como operador do server, quero as vari&aacute;veis de ambiente renomeadas para <span class="mono">POLYAGENT_*</span> em corte limpo, para que a configura&ccedil;&atilde;o n&atilde;o carregue o nome antigo.</p>
+      <ul class="ac">
+        <li>AC: As 16 vars <span class="mono">CURSOR_BRIDGE_*</span> viram <span class="mono">POLYAGENT_*</span> mantendo o sufixo; <span class="mono">CURSOR_BIN</span> vira <span class="mono">POLYAGENT_CURSOR_BIN</span>. Total: 17 renomea&ccedil;&otilde;es.</li>
+        <li>AC: <span class="mono">CURSOR_ENABLED</span> (<span class="mono">cli.ts:83</span>) e <span class="mono">CURSOR_BRIDGE_MARKER</span> (<span class="mono">hook:110</span>) s&atilde;o consts derivadas, n&atilde;o env vars &mdash; renomeiam como identificadores, sem entrar na tabela de migra&ccedil;&atilde;o.</li>
+        <li>AC: "cursor" sobrevive s&oacute; onde nomeia o engine de fato (<span class="mono">POLYAGENT_CURSOR_BIN</span>, <span class="mono">POLYAGENT_ENABLE_CURSOR</span>).</li>
+        <li>AC: Nenhum fallback para o nome antigo; ler a var velha n&atilde;o tem efeito.</li>
+        <li>AC: As vars cross-cutting seguem concentradas em consts de m&oacute;dulo em <span class="mono">cli.ts</span>/<span class="mono">usage.ts</span>; <span class="mono">agents.ts</span> e o hook mant&ecirc;m a leitura da pr&oacute;pria config, como hoje.</li>
+        <li>AC: README traz a tabela nome-antigo para nome-novo, marcada como breaking change.</li>
+        <li>AC: Typecheck passes.</li>
+      </ul>
+    </div>
+
+    <div class="user-story" id="US-003">
+      <div class="us-head">
+        <span class="us-id">US-003</span>
+        <span class="badge badge-ready"><span class="dot"></span>Ready</span>
+      </div>
+      <p class="story-text">Como usu&aacute;rio do bridge, quero as tools <span class="mono">plan</span> e <span class="mono">build</span> removidas, para que o invent&aacute;rio s&oacute; ofere&ccedil;a o que realmente se usa.</p>
+      <ul class="ac">
+        <li>AC: As registra&ccedil;&otilde;es de <span class="mono">plan</span> (<span class="mono">index.ts:293</span>) e <span class="mono">build</span> (<span class="mono">index.ts:331</span>) saem; o server passa de 12 para 10 <span class="mono">registerTool</span>.</li>
+        <li>AC: <span class="mono">planPrompt</span>/<span class="mono">buildPrompt</span> saem de <span class="mono">prompts.ts</span> e seus testes de <span class="mono">test/prompts.test.ts</span>.</li>
+        <li>AC: A string <span class="mono">instructions</span> do <span class="mono">McpServer</span> (<span class="mono">index.ts:28</span>) perde "Two-phase work: plan to build" &mdash; ela carrega no startup e &eacute; load-bearing para ado&ccedil;&atilde;o.</li>
+        <li>AC: O tipo <span class="mono">RunOpts.mode: "plan" | "ask"</span> (<span class="mono">cli.ts:286</span>) e <span class="mono">ExploreMode</span> (<span class="mono">prompts.ts:86</span>) permanecem intactos &mdash; s&atilde;o o modo read-only do codex, hom&ocirc;nimos da tool removida.</li>
+        <li>AC: Um teste cobre que <span class="mono">buildCodexArgs</span> com <span class="mono">mode: "plan"</span> ainda emite <span class="mono">-s read-only</span> ap&oacute;s a remo&ccedil;&atilde;o.</li>
+        <li>AC: README lista as dez tools finais pelo nome &mdash; hoje ele diz "ten tools" mas lista <span class="mono">plan</span>/<span class="mono">build</span> e omite <span class="mono">fast_delegate</span>/<span class="mono">fan_out</span> (<span class="mono">README.md:13</span>). <span class="mono">CLAUDE.md</span> idem, incluindo a se&ccedil;&atilde;o de invariantes.</li>
+        <li>AC: Typecheck passes e <span class="mono">npm test</span> verde.</li>
+      </ul>
+    </div>
+
+    <div class="user-story" id="US-004">
+      <div class="us-head">
+        <span class="us-id">US-004</span>
+        <span class="badge badge-blocked"><span class="dot"></span>Blocked &middot; US-002, US-008</span>
+      </div>
+      <p class="story-text">Como operador, quero escolher engine e modelo por tool auxiliar, via env e por chamada, para que cada uma rode onde faz sentido em vez de todas no codex.</p>
+      <ul class="ac">
+        <li>AC: Cada uma das quatro tools l&ecirc; seu par pr&oacute;prio de env: <span class="mono">POLYAGENT_&lt;TOOL&gt;_ENGINE</span> e <span class="mono">POLYAGENT_&lt;TOOL&gt;_MODEL</span>, para <span class="mono">EXPLORE</span>, <span class="mono">READ_SLICE</span>, <span class="mono">RUN_FILTERED</span> e <span class="mono">WEB_LOOKUP</span>.</li>
+        <li>AC: O par&acirc;metro <span class="mono">engine</span> opcional entra apenas no <span class="mono">inputSchema</span> das quatro tools auxiliares &mdash; <strong>nunca</strong> no objeto <span class="mono">routing</span> (<span class="mono">index.ts:33</span>), que &eacute; spread via <span class="mono">...routing</span> em 10 registra&ccedil;&otilde;es e daria <span class="mono">engine</span> tamb&eacute;m ao <span class="mono">delegate</span>, <span class="mono">fan_out</span> e <span class="mono">follow_up</span>.</li>
+        <li>AC: Ordem de preced&ecirc;ncia, da maior para a menor: par&acirc;metro da chamada, env espec&iacute;fica da tool, default atual.</li>
+        <li>AC: Sem nenhum override, as quatro mant&ecirc;m o comportamento de hoje: engine <span class="mono">codex</span>, modelo <span class="mono">gpt-5.6-luna</span>.</li>
+        <li>AC: Existe uma matriz de capacidade por engine declarada em c&oacute;digo, com estes valores: <strong>web search</strong> s&oacute; no codex (<span class="mono">cli.ts:384</span>) &mdash; grok e claude ignoram o campo <span class="mono">web</span>; <strong>read-only</strong> vem do sandbox bwrap para todos os engines (<span class="mono">buildSandboxSpec(workspace, engine, !!mode)</span> monta o workspace <span class="mono">--ro-bind</span>), e s&oacute; o codex tem read-only adicional no n&iacute;vel do engine (<span class="mono">-s read-only</span>).</li>
+        <li>AC: A matriz registra explicitamente que no n&iacute;vel do engine <span class="mono">buildGrokArgs</span> ignora <span class="mono">mode</span> e sempre emite <span class="mono">--always-approve</span> (<span class="mono">cli.ts:356</span>), e que no claude <span class="mono">mode</span> emite <span class="mono">--dangerously-skip-permissions</span> (<span class="mono">cli.ts:425</span>) &mdash; o oposto de read-only. Por isso o read-only fora do codex depende do sandbox, o que torna a US-008 pr&eacute;-requisito desta.</li>
+        <li>AC: A resolu&ccedil;&atilde;o recusa, com erro nomeando o motivo, um engine que n&atilde;o atenda o requisito da tool: read-only para <span class="mono">explore</span>/<span class="mono">read_slice</span>/<span class="mono">web_lookup</span>, web search para <span class="mono">web_lookup</span>. Nunca degrada para acesso total em sil&ecirc;ncio.</li>
+        <li>AC: <span class="mono">run_filtered</span> aceita qualquer engine &mdash; j&aacute; roda com <span class="mono">force: true</span> por desenho (<span class="mono">index.ts:275</span>), n&atilde;o &eacute; read-only.</li>
+        <li>AC: A resolu&ccedil;&atilde;o &eacute; fun&ccedil;&atilde;o pura em <span class="mono">cli.ts</span>, com teste unit&aacute;rio de preced&ecirc;ncia, engine inv&aacute;lida e recusa por capacidade.</li>
+        <li>AC: Typecheck passes e <span class="mono">npm test</span> verde.</li>
+      </ul>
+    </div>
+
+    <div class="user-story" id="US-005">
+      <div class="us-head">
+        <span class="us-id">US-005</span>
+        <span class="badge badge-blocked"><span class="dot"></span>Blocked &middot; US-002</span>
+      </div>
+      <p class="story-text">Como implementador, quero que a falha de processo preserve stdout, stderr e exit code separados, para que a causa do erro seja classific&aacute;vel &mdash; hoje ela &eacute; descartada.</p>
+      <ul class="ac">
+        <li>AC: O erro lan&ccedil;ado por <span class="mono">runOnce</span> (<span class="mono">cli.ts:688-720</span>) passa a carregar <span class="mono">{ stdout, stderr, exitCode }</span> em vez de colapsar em <span class="mono">stderr.trim() || stdout.trim()</span>. O JSON estruturado dos CLIs sai em <span class="mono">stdout</span> e hoje se perde sempre que stderr tem qualquer conte&uacute;do.</li>
+        <li>AC: A mensagem de erro vis&iacute;vel ao chamador n&atilde;o regride: quem s&oacute; l&ecirc; <span class="mono">error.message</span> continua vendo o mesmo texto de antes.</li>
+        <li>AC: <span class="mono">isCodexEnvError</span> continua funcionando sobre stderr, sem mudan&ccedil;a de comportamento nem no <span class="mono">FALLBACK_ENGINE_ORDER</span>.</li>
+        <li>AC: Teste cobre o caso que hoje falha: exit n&atilde;o-zero com stderr n&atilde;o-vazio E stdout com JSON de erro &mdash; ambos chegam ao chamador.</li>
+        <li>AC: Typecheck passes e <span class="mono">npm test</span> verde.</li>
+      </ul>
+    </div>
+
+    <div class="user-story" id="US-006">
+      <div class="us-head">
+        <span class="us-id">US-006</span>
+        <span class="badge badge-blocked"><span class="dot"></span>Blocked &middot; US-004, US-005</span>
+      </div>
+      <p class="story-text">Como usu&aacute;rio, quero que cota esgotada retorne um erro acion&aacute;vel nomeando os engines dispon&iacute;veis, para que eu decida a troca em vez de receber erro cru do CLI.</p>
+      <ul class="ac">
+        <li>AC: <span class="mono">classifyQuotaError({ stdout, stderr, exitCode }, engine)</span> &eacute; fun&ccedil;&atilde;o pura em <span class="mono">cli.ts</span> e retorna <span class="mono">"quota_exhausted" | "rate_limited" | null</span>. A assinatura recebe os tr&ecirc;s streams porque o sinal vive em stdout, n&atilde;o em stderr (ver spike).</li>
+        <li>AC: A classifica&ccedil;&atilde;o l&ecirc; primeiro campos JSON estruturados e s&oacute; depois aplica regex sobre as mensagens de erro extra&iacute;das. Fonte dos padr&otilde;es: <span class="mono">spikes/quota-patterns.md</span>, com a evid&ecirc;ncia de cada um.</li>
+        <li>AC: <span class="mono">exitCode === 0</span> nunca classifica como cota &mdash; guarda contra uma resposta bem-sucedida que apenas mencione essas mensagens.</li>
+        <li>AC: <span class="mono">rate_limited</span> (throttle transit&oacute;rio) &eacute; distinto de <span class="mono">quota_exhausted</span> (cota do plano acabou). Trocar de engine resolve o segundo; o primeiro pede espera &mdash; e sua mensagem diz exatamente isso, <strong>sem</strong> sugerir troca de engine.</li>
+        <li>AC: Teste por engine com fixtures de stdout montadas a partir das mensagens can&ocirc;nicas do spike (nenhuma cota foi esgotada para captur&aacute;-las), cobrindo os dois tipos e o caso negativo.</li>
+        <li>AC: Ao classificar cota, a chamada falha com <span class="mono">&lt;engine&gt; quota exhausted &mdash; available engines: &lt;lista&gt; &mdash; retry with engine:"&lt;sugest&atilde;o&gt;"</span>. Nunca retenta sozinha.</li>
+        <li>AC: A lista vem de <span class="mono">hasEngine()</span>, exclui o que estourou, respeita <span class="mono">POLYAGENT_ENABLE_CURSOR</span> e &eacute; <strong>intersectada com a matriz de capacidade da US-004</strong> &mdash; nunca sugerir um engine que a resolu&ccedil;&atilde;o daquela tool recusaria. Sem nenhum candidato v&aacute;lido, o erro diz isso em vez de sugerir lista vazia.</li>
+        <li>AC: Vale para todas as tools que passam por <span class="mono">runCursor</span>, <span class="mono">delegate</span> inclu&iacute;do. Onde a tool exp&otilde;e <span class="mono">engine</span> (as quatro auxiliares), a sugest&atilde;o &eacute; esse par&acirc;metro. No <span class="mono">delegate</span>, que n&atilde;o o exp&otilde;e, a sugest&atilde;o &eacute; o menor <span class="mono">level</span> de 1 a 5 cujo engine prim&aacute;rio ainda est&aacute; dispon&iacute;vel. Em <span class="mono">fast_delegate</span>, <span class="mono">fan_out</span> e <span class="mono">generate_image</span> a mensagem informa a cota sem sugerir par&acirc;metro; em <span class="mono">follow_up</span> informa que o engine est&aacute; preso &agrave; sess&atilde;o retomada.</li>
+        <li>AC: Cota &eacute; distinta de <span class="mono">isCodexEnvError</span>: s&oacute; a de ambiente cai no <span class="mono">FALLBACK_ENGINE_ORDER</span> autom&aacute;tico.</li>
+        <li>AC: <span class="mono">usage.ts</span> registra cota com outcome pr&oacute;prio e <span class="mono">computeEngineHealth</span> o ignora explicitamente &mdash; hoje qualquer outcome que n&atilde;o seja failure/timeout conta como sucesso (<span class="mono">usage.ts:130</span>), o que inflaria o health de um engine sem cota.</li>
+        <li>AC: Typecheck passes e <span class="mono">npm test</span> verde.</li>
+      </ul>
+    </div>
+
+    <div class="user-story" id="US-007">
+      <div class="us-head">
+        <span class="us-id">US-007</span>
+        <span class="badge badge-blocked"><span class="dot"></span>Blocked &middot; US-001, US-002</span>
+      </div>
+      <p class="story-text">Como operador, quero o hook renomeado e coerente com a nova identidade, para que a configura&ccedil;&atilde;o do host n&atilde;o aponte para um caminho inexistente.</p>
+      <ul class="ac">
+        <li>AC: <span class="mono">hooks/prefer-cursor-bridge.mjs</span> vira <span class="mono">hooks/prefer-polyagent.mjs</span>; <span class="mono">test/hook.test.ts</span> importa o caminho novo.</li>
+        <li>AC: As strings de nudge/redirect citam o alias novo do server e as tools por nome, sem referenciar <span class="mono">plan</span>/<span class="mono">build</span>.</li>
+        <li>AC: README e <span class="mono">INSTALL.md</span> documentam o novo caminho no <span class="mono">settings.json</span> do host como breaking change, junto da tabela de env da US-002.</li>
+        <li>AC: Os 3 pontos de entrada (PreToolUse, SessionStart, SubagentStart) seguem fail-open: qualquer erro imprime nada e sai 0.</li>
+        <li>AC: A dedup por sess&atilde;o continua gravando a chave antes de emitir, preservando o comportamento one-shot fail-open.</li>
+        <li>AC: Typecheck passes e <span class="mono">npm test</span> verde.</li>
+      </ul>
+    </div>
+
+    <div class="user-story" id="US-008">
+      <div class="us-head">
+        <span class="us-id">US-008</span>
+        <span class="badge badge-blocked"><span class="dot"></span>Blocked &middot; US-002</span>
+      </div>
+      <p class="story-text">Como respons&aacute;vel pela seguran&ccedil;a do bridge, quero o bwrap obrigat&oacute;rio, para que o read-only das tools auxiliares deixe de depender de uma condi&ccedil;&atilde;o silenciosa do host.</p>
+      <ul class="ac">
+        <li>AC: O fallback gracioso some. Hoje, sem <span class="mono">bwrap</span> no PATH, <span class="mono">runOnce</span> apenas escreve um aviso em stderr e roda sem sandbox (<span class="mono">cli.ts:681-685</span>) &mdash; aviso que o chamador MCP n&atilde;o v&ecirc;.</li>
+        <li>AC: Na inicializa&ccedil;&atilde;o, a aus&ecirc;ncia de <span class="mono">bwrap</span> faz o server falhar com erro nomeando o rem&eacute;dio (<span class="mono">sudo apt install bubblewrap</span>), em vez de subir degradado.</li>
+        <li>AC: <span class="mono">POLYAGENT_SANDBOX=off</span> continua desligando o sandbox por escolha expl&iacute;cita do operador; o que deixa de existir &eacute; a degrada&ccedil;&atilde;o <em>impl&iacute;cita</em> por bin&aacute;rio ausente.</li>
+        <li>AC: Com o sandbox desligado por escolha expl&iacute;cita, as tr&ecirc;s tools read-only (<span class="mono">explore</span>, <span class="mono">read_slice</span>, <span class="mono">web_lookup</span>) s&oacute; aceitam codex &mdash; o &uacute;nico engine com read-only pr&oacute;prio. Qualquer outro engine &eacute; recusado nomeando o motivo.</li>
+        <li>AC: README e <span class="mono">INSTALL.md</span> listam o bubblewrap como pr&eacute;-requisito de instala&ccedil;&atilde;o, n&atilde;o como recomenda&ccedil;&atilde;o.</li>
+        <li>AC: Teste cobre os tr&ecirc;s caminhos: bwrap presente (roda), bwrap ausente (falha nomeando o rem&eacute;dio), sandbox desligado por env com engine n&atilde;o-codex numa tool read-only (recusa).</li>
+        <li>AC: Typecheck passes e <span class="mono">npm test</span> verde.</li>
+      </ul>
+    </div>
+
+    <h3>Assumptions</h3>
+    <div class="callout callout-assumption">
+      <span class="ico">i</span>
+      <div><strong>ASSUMPTION:</strong> o nome <span class="mono">polyagent-mcp</span> foi escolhido por mim em 13/09/2026, sob o crit&eacute;rio dado pelo usu&aacute;rio ("o que for melhor pro projeto ser achado no Google e no GitHub"). Evid&ecirc;ncia: <span class="mono">delegate-mcp</span> e <span class="mono">agent-bridge-mcp</span> ocupados no npm (HTTP 200); <span class="mono">polyagent-mcp</span> livre (404). Nome distintivo rankeia no termo exato; as palavras de busca reais v&atilde;o para os topics do GitHub e o topo do README. Ranking &eacute; premissa, n&atilde;o fato verific&aacute;vel. O usu&aacute;rio pode vetar antes da aprova&ccedil;&atilde;o.</div>
+    </div>
+    <div class="callout callout-assumption">
+      <span class="ico">i</span>
+      <div><strong>ASSUMPTION:</strong> "<span class="mono">plan</span> e <span class="mono">build</span> n&atilde;o s&atilde;o usadas" &eacute; afirma&ccedil;&atilde;o do usu&aacute;rio, n&atilde;o mensur&aacute;vel pelo reposit&oacute;rio &mdash; exigiria telemetria de <span class="mono">usage.ts</span> por tool.</div>
+    </div>
+
+    <h3>Assumption Locks</h3>
+    <div class="callout callout-assumption">
+      <span class="ico">i</span>
+      <div><strong>ASSUMPTION-LOCK:</strong> os padr&otilde;es de cota do <strong>grok</strong> vieram do fonte oficial (<span class="mono">xai-org/grok-build</span>), n&atilde;o de um bin&aacute;rio local &mdash; o grok n&atilde;o est&aacute; instalado nesta m&aacute;quina (symlink quebrado em <span class="mono">~/.local/bin/grok</span>). Codex e claude tiveram as strings observadas diretamente nos bin&aacute;rios instalados. Se os padr&otilde;es do grok n&atilde;o casarem em runtime, dispara um update do PRD.</div>
+    </div>
+    <div class="callout callout-risk">
+      <span class="ico">!</span>
+      <div><strong>RISCO:</strong> US-001, US-002 e US-007 s&atilde;o breaking changes simult&acirc;neos na configura&ccedil;&atilde;o do host. No merge, o <span class="mono">settings.json</span> e o registro do MCP do pr&oacute;prio usu&aacute;rio param de casar at&eacute; serem editados &agrave; m&atilde;o &mdash; e o alias muda os prefixos <span class="mono">mcp__*__</span> de toda tool do bridge. Mitiga&ccedil;&atilde;o: as tr&ecirc;s entregam juntas, com a tabela de migra&ccedil;&atilde;o pronta antes do merge.</div>
+    </div>
+  </section>
+
+  <section class="card" id="impacto">
+    <div class="section-head"><span class="letter">I</span><h2>Impacto esperado</h2></div>
+    <div class="body">
+      <p>O projeto passa a se apresentar pelo que faz &mdash; delegar para uma frota de coding agents com economia de contexto &mdash; em vez de pelo vendor que originou o c&oacute;digo. &Eacute; pr&eacute;-requisito para qualquer divulga&ccedil;&atilde;o p&uacute;blica: hoje o nome afasta exatamente quem procura essa ferramenta e n&atilde;o usa Cursor.</p>
+      <p>Operacionalmente, cota esgotada deixa de ser beco sem sa&iacute;da: a resposta nomeia o que fazer, e a configura&ccedil;&atilde;o por tool permite distribuir o consumo entre as tr&ecirc;s assinaturas de forma permanente em vez de concentrar tudo no codex.</p>
+      <p>US-005 tem valor pr&oacute;prio al&eacute;m de habilitar a US-006: hoje qualquer falha de CLI que escreva em stderr descarta o diagn&oacute;stico estruturado de stdout, o que degrada toda mensagem de erro do bridge, n&atilde;o s&oacute; as de cota.</p>
+      <p>Limites do tier <span class="mono">full</span>: 8 user stories, one-shot, sem <span class="mono">features/</span>.</p>
+    </div>
+  </section>
+
+  <section class="card" id="alinhamento">
+    <div class="section-head"><span class="letter">A</span><h2>Alinhamento</h2><span class="count">7/7 pass</span></div>
+
+    <h3>Requirements Checklist</h3>
+    <ul class="req-checklist">
+      <li class="rc rc-pass"><span class="mark">&#10003;</span>Est&aacute; definido o crit&eacute;rio de escolha do nome novo, com a evid&ecirc;ncia que o sustenta e a porta de veto do usu&aacute;rio?</li>
+      <li class="rc rc-pass"><span class="mark">&#10003;</span>Est&aacute; definido o destino de cada env var, separando as 17 que migram das 2 consts derivadas que n&atilde;o s&atilde;o env?</li>
+      <li class="rc rc-pass"><span class="mark">&#10003;</span>Est&aacute; definida a fronteira entre a tool <span class="mono">plan</span> (removida) e o <span class="mono">mode: "plan"</span> do RunOpts (preservado)?</li>
+      <li class="rc rc-pass"><span class="mark">&#10003;</span>Est&aacute; definido, por tool, quais engines s&atilde;o aceit&aacute;veis &mdash; incluindo que <span class="mono">run_filtered</span> n&atilde;o &eacute; read-only e que s&oacute; o codex trata web search hoje?</li>
+      <li class="rc rc-pass"><span class="mark">&#10003;</span>Est&atilde;o definidos como reconhecer cota em cada engine, com evid&ecirc;ncia rastre&aacute;vel, e a distin&ccedil;&atilde;o entre cota esgotada e throttle transit&oacute;rio?</li>
+      <li class="rc rc-pass"><span class="mark">&#10003;</span>Est&aacute; definido o raio de alcance da mudan&ccedil;a de cota, dado que <span class="mono">runCursor</span> &eacute; compartilhado por todas as tools?</li>
+      <li class="rc rc-pass"><span class="mark">&#10003;</span>Est&aacute; definido de onde vem a garantia de read-only quando a tool sai do codex, e o que acontece quando essa garantia n&atilde;o est&aacute; dispon&iacute;vel?</li>
+    </ul>
+
+    <h3>Open Questions</h3>
+    <ul class="open-questions">
+      <li class="oq oq-answered"><span class="pill">answered</span> Qual o nome novo? &mdash; <span class="mono">polyagent-mcp</span>, pelo crit&eacute;rio de descoberta delegado pelo usu&aacute;rio; livre no npm, sem colis&atilde;o.</li>
+      <li class="oq oq-answered"><span class="pill">answered</span> As env vars antigas continuam funcionando? &mdash; N&atilde;o. Corte limpo, sem alias nem deprecation.</li>
+      <li class="oq oq-answered"><span class="pill">answered</span> Cota esgotada deve retentar em outro engine? &mdash; N&atilde;o. Erro acion&aacute;vel; a troca &eacute; decis&atilde;o do usu&aacute;rio a cada chamada.</li>
+      <li class="oq oq-answered"><span class="pill">answered</span> Qual a granularidade da config? &mdash; Por tool, engine e modelo separados, via env e via par&acirc;metro de chamada.</li>
+      <li class="oq oq-answered"><span class="pill">answered</span> Como o erro sugere um engine se o par&acirc;metro n&atilde;o existia? &mdash; US-004 adiciona <span class="mono">engine</span> ao schema das quatro tools, tornando a sugest&atilde;o execut&aacute;vel sem reiniciar o server.</li>
+      <li class="oq oq-answered"><span class="pill">answered</span> O tratamento de cota afeta o <span class="mono">delegate</span>, j&aacute; que <span class="mono">runCursor</span> &eacute; compartilhado? &mdash; Sim, por decis&atilde;o do usu&aacute;rio; o Non-Goal foi removido. Os tiers 1-5 seguem intactos.</li>
+      <li class="oq oq-answered"><span class="pill">answered</span> Como reconhecer cota em cada CLI? &mdash; Resolvido pelo spike de 14/09/2026; o sinal vive em stdout, o que exigiu a US-005 como pr&eacute;-requisito.</li>
+      <li class="oq oq-answered"><span class="pill">answered</span> Fora do codex, read-only s&oacute; existe via bwrap &mdash; e o bwrap tinha fallback gracioso. Como fechar? &mdash; Tornando o bwrap obrigat&oacute;rio (US-008), por decis&atilde;o do usu&aacute;rio. Isso removeu "mudar o sandbox" dos Non-Goals.</li>
+      <li class="oq oq-parked"><span class="pill">parked</span> <span class="mono">fan_out</span> e <span class="mono">generate_image</span> tamb&eacute;m s&atilde;o peso morto? &mdash; Fora do escopo; o usu&aacute;rio nomeou s&oacute; <span class="mono">plan</span> e <span class="mono">build</span>. Decis&atilde;o t&aacute;tica: ficam como est&atilde;o.</li>
+      <li class="oq oq-parked"><span class="pill">parked</span> Publicar no npm sob o nome novo? &mdash; Abaixo do cap desta rodada; o rebrand n&atilde;o depende de publica&ccedil;&atilde;o. Decis&atilde;o t&aacute;tica: o pacote segue n&atilde;o-publicado.</li>
+      <li class="oq oq-parked"><span class="pill">parked</span> Migrar para <span class="mono">stream-json</span> no claude, que exp&otilde;e <span class="mono">RateLimitEvent</span> tipado? &mdash; Sinal melhor que regex, mas exige trocar o parser e consumir o stream. Decis&atilde;o t&aacute;tica: fica com o JSON terminal atual; reavaliar se os regex se mostrarem fr&aacute;geis.</li>
+    </ul>
+
+    <h3>Verification</h3>
+    <div class="verify-box">npm run build            # typecheck (tsc strict) — gate principal
+npm test                 # vitest: prompts, cli, hook, usage, agents
+
+# US-001/002 — nome antigo só nos comandos de clone do README
+grep -rn "cursor-mcp-bridge\|CURSOR_BRIDGE_" src/ hooks/ test/ package.json INSTALL.md
+
+# US-003 — 10 registerTool, sem plan/build, read-only preservado
+grep -c registerTool src/index.ts && npx vitest run -t "read-only"
+
+# US-004 — precedência e recusa por capacidade
+npx vitest run -t "resolve"
+
+# US-005 — stdout preservado quando stderr não está vazio
+npx vitest run -t "stdout"
+
+# US-006 — classificação por engine, sem retry
+npx vitest run -t "quota"</div>
+  </section>
+</main>
+</div>
+</body>
+</html>

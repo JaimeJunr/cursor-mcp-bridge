@@ -37,7 +37,7 @@ describe("teto de latência degenerado cai pro default em vez de envenenar o sco
     expect(health.grok).toBeLessThanOrEqual(1);
   });
 
-  it("ceil NaN (CURSOR_BRIDGE_TIMEOUT_MS inválido) cai pro default e não envenena nenhuma engine", () => {
+  it("ceil NaN (POLYAGENT_TIMEOUT_MS inválido) cai pro default e não envenena nenhuma engine", () => {
     const records: UsageEntry[] = [
       { ts: NOW - 1000, tool: "delegate", outChars: 1, engine: "grok", outcome: "success", durationMs: 1000 },
       { ts: NOW - 1000, tool: "delegate", outChars: 1, engine: "codex", outcome: "success", durationMs: 1000 },

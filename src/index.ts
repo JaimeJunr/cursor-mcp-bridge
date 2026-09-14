@@ -6,13 +6,13 @@ import {
   runCursor, EXPLORE_MODEL, IMAGE_MODEL, DEFAULT_TIMEOUT_MS, budgetNote,
   formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, resolveFastTier, FAST_CANDIDATES,
   isDefaultTierEngine, withTerseStyle,
-  raceFirstSuccess, CURSOR_ENABLED,
+  raceFirstSuccess, CURSOR_ENABLED, sandboxPreflight, resolveAuxTool,
   type CliResult, type Engine,
 } from "./cli.js";
 import { resolveAgent } from "./agents.js";
 import {
   isFullFileRequest, readSlicePrompt, runFilteredPrompt, explorePrompt, webLookupPrompt,
-  generateImagePrompt, generateImageGrokPrompt, planPrompt, buildPrompt, fanOutArbiterPrompt,
+  generateImagePrompt, generateImageGrokPrompt, fanOutArbiterPrompt,
   type FanOutWorkerOutput,
 } from "./prompts.js";
 import {
@@ -22,10 +22,10 @@ import {
 import { scrubSecrets } from "./scrub.js";
 
 const server = new McpServer(
-  { name: "cursor-mcp-bridge", version: "0.5.0" },
+  { name: "polyagent-mcp", version: "0.5.0" },
   {
     instructions:
-      "cursor-mcp-bridge offloads work to cheap headless CLIs so you do not spend your own context. Routing: pure reading or locating a specific slice → read_slice; mapping or searching the codebase → explore; running a noisy command and keeping only the signal → run_filtered; web or docs lookup → web_lookup; self-contained implementation, commits, PRs, multi-file edits, or running and fixing a build → delegate (level 1-5). Two-phase work: plan → build. Prefer these tools over native Read, Grep, WebSearch, or Bash for pure reading, locating, web lookup, and grunt work; use native Read only when you are about to edit that file. Every tool returns a session_id for follow_up.",
+      "polyagent-mcp offloads work to cheap headless CLIs so you do not spend your own context. Routing: pure reading or locating a specific slice → read_slice; mapping or searching the codebase → explore; running a noisy command and keeping only the signal → run_filtered; web or docs lookup → web_lookup; self-contained implementation, commits, PRs, multi-file edits, or running and fixing a build → delegate (level 1-5). Prefer these tools over native Read, Grep, WebSearch, or Bash for pure reading, locating, web lookup, and grunt work; use native Read only when you are about to edit that file. Every tool returns a session_id for follow_up.",
   },
 );
 
@@ -42,7 +42,7 @@ const routing = {
     .describe("Reasoning effort for parameterized models (e.g. 'low'|'high'). Ignored by 'auto'."),
 };
 
-// Persona especializada, resolvida no host por resolveAgent. Compartilhada por delegate/fast_delegate/build.
+// Persona especializada, resolvida no host por resolveAgent. Compartilhada por delegate/fast_delegate.
 const agentSchema = z.union([
   z.string(),
   z.object({ prompt: z.string(), name: z.string().optional(), model: z.string().optional() }),
@@ -54,7 +54,7 @@ const agentDescription =
  * Formata o resultado do Cursor: passa o texto pelo egress scrubber (scrubSecrets) antes do footer
  * de session_id, loga os chars devolvidos ao contexto (custo real) e — quando algo foi redigido —
  * loga também um evento "blocked_exfil". `tier` (opcional) carrega o tier-integrity receipt de
- * quem chamou o resolver (delegate/fast_delegate/plan/build); tools sem tier omitem.
+ * quem chamou o resolver (delegate/fast_delegate); tools sem tier omitem.
  */
 function format(
   tool: string,
@@ -153,6 +153,7 @@ server.registerTool(
         agentPrompt: withTerseStyle(resolved?.prompt),
         force: true,
         timeoutMs: timeout_ms,
+        tool: "delegate",
       }),
       { requestedLevel: level, matchedRequest: isDefaultTierEngine(level, tier.engine) },
     );
@@ -192,6 +193,7 @@ server.registerTool(
         agentPrompt: withTerseStyle(resolved?.prompt),
         force: true,
         timeoutMs: timeout_ms,
+        tool: "fast_delegate",
       }),
       // matchedRequest reflete se saiu uma engine nativa (FAST_CANDIDATES) ou o fallback pro cursor
       // — sem isso, o downgrade pro cursor ficava indistinguível de um roteamento nativo no log.
@@ -219,13 +221,18 @@ server.registerTool(
         .enum(["medium", "thorough"])
         .optional()
         .describe("How wide to sweep on a fan-out search (no `files`). 'thorough' chases every plausible location/naming convention. Default 'medium'."),
+      engine: z
+        .string()
+        .optional()
+        .describe("Engine override for this call: 'codex' (default), 'grok', 'claude' or 'cursor'. Beats POLYAGENT_EXPLORE_ENGINE. explore is read-only: a non-codex engine needs the sandbox on."),
       ...routing,
     },
   },
-  async ({ question, files, breadth, cwd, model, effort }) => {
+  async ({ question, files, breadth, cwd, model, effort, engine: engineParam }) => {
     const { prompt, mode } = explorePrompt(question, files, breadth);
-    // codex read-only (mode) com o modelo barato de leitura (luna). O worker localiza/mapeia sem editar.
-    return format("explore", await runCursor({ prompt, cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode, agentPrompt: withTerseStyle() }));
+    // read-only (mode) com o modelo barato de leitura (luna) por default. O worker localiza/mapeia sem editar.
+    const { engine, model: auxModel } = resolveAuxTool("explore", { engine: engineParam, model });
+    return format("explore", await runCursor({ prompt, cwd, engine, model: auxModel, effort, mode, agentPrompt: withTerseStyle(), tool: "explore" }));
   },
 );
 
@@ -237,11 +244,15 @@ server.registerTool(
       "Read-only surgical read: the Cursor agent reads the given file(s) and returns ONLY the code relevant to `want` (exact lines with file:line), never the whole file. Full-file/verbatim dump requests are refused by design and enforced before the worker is spawned. Use instead of Read when you need a specific function/section from large files — the full file never enters your context.",
     inputSchema: {
       files: z.array(z.string()).min(1).describe("File paths to read from (relative to cwd or absolute)."),
+      engine: z
+        .string()
+        .optional()
+        .describe("Engine override for this call: 'codex' (default), 'grok', 'claude' or 'cursor'. Beats POLYAGENT_READ_SLICE_ENGINE. read_slice is read-only: a non-codex engine needs the sandbox on."),
       want: z.string().describe("What to extract, e.g. 'the login handler and its imports'."),
       ...routing,
     },
   },
-  async ({ files, want, cwd, model, effort }) => {
+  async ({ files, want, cwd, model, effort, engine: engineParam }) => {
     if (isFullFileRequest(want)) {
       return format("read_slice_refused", {
         text: [
@@ -253,7 +264,8 @@ server.registerTool(
         ].join(" "),
       });
     }
-    return format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask", agentPrompt: withTerseStyle() }));
+    const { engine, model: auxModel } = resolveAuxTool("read_slice", { engine: engineParam, model });
+    return format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine, model: auxModel, effort, mode: "ask", agentPrompt: withTerseStyle(), tool: "read_slice" }));
   },
 );
 
@@ -265,14 +277,20 @@ server.registerTool(
       "Run a shell command via the Cursor agent and get back ONLY the relevant lines/summary — semantic filtering of huge output (build/test/log). Complements mechanical filters: use when the noise needs judgment to strip. The full output stays on Cursor's side.",
     inputSchema: {
       command: z.string().describe("The exact shell command to run."),
+      engine: z
+        .string()
+        .optional()
+        .describe("Engine override for this call: 'codex' (default), 'grok', 'claude' or 'cursor'. Beats POLYAGENT_RUN_FILTERED_ENGINE. run_filtered accepts any engine."),
       want: z.string().optional().describe("What matters in the output, e.g. 'only failing tests'. Omit for meaningful-signal-only."),
       ...routing,
     },
   },
-  async ({ command, want, cwd, model, effort }) =>
-    // codex sem mode → bypass total: rodar o comando (que pode escrever) É o propósito do tool.
+  async ({ command, want, cwd, model, effort, engine: engineParam }) => {
+    // sem mode → bypass total: rodar o comando (que pode escrever) É o propósito do tool.
     // force mantém a paridade quando o fallback é cursor. O worker filtra o output por relevância.
-    format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, force: true, agentPrompt: withTerseStyle() })),
+    const { engine, model: auxModel } = resolveAuxTool("run_filtered", { engine: engineParam, model });
+    return format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, engine, model: auxModel, effort, force: true, agentPrompt: withTerseStyle(), tool: "run_filtered" }));
+  },
 );
 
 server.registerTool(
@@ -281,95 +299,20 @@ server.registerTool(
     _meta: { "anthropic/alwaysLoad": true },
     description:
       "Delegate a web/documentation lookup to the Cursor agent (which has web access): library docs, API references, error messages, current versions. Cheap way to fetch info newer than your training data.",
-    inputSchema: { query: z.string().describe("What to look up on the web."), ...routing },
+    inputSchema: {
+      query: z.string().describe("What to look up on the web."),
+      engine: z
+        .string()
+        .optional()
+        .describe("Engine override for this call: 'codex' (default), 'grok', 'claude' or 'cursor'. Beats POLYAGENT_WEB_LOOKUP_ENGINE. web_lookup requires web search, which only codex has."),
+      ...routing,
+    },
   },
-  async ({ query, cwd, model, effort }) =>
-    // codex read-only (mode:'ask' → filesystem intocado) + web:true liga a busca web do codex
+  async ({ query, cwd, model, effort, engine: engineParam }) => {
+    // read-only (mode:'ask' → filesystem intocado) + web:true liga a busca web do codex
     // (-c tools.web_search=true). approval_policy=never evita pendurar em headless.
-    format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, mode: "ask", web: true, agentPrompt: withTerseStyle() })),
-);
-
-server.registerTool(
-  "plan",
-  {
-    description:
-      "Phase 1 of plan→build: a STRONG model reads the codebase and returns an implementation PLAN — read-only, it does NOT edit anything. Review/approve the plan, then hand it to `build` (which can run a cheaper executor). Defaults to level 3 (GPT-5.6 Sol xhigh on codex) — strong AND hard read-only (-s read-only). Level 5 (Opus max on claude) is also strong but read-only-by-prompt only. Returns the plan + a session_id.",
-    inputSchema: {
-      task: z.string().describe("What to plan — the feature or fix to design."),
-      level: z
-        .number()
-        .int()
-        .min(1)
-        .max(5)
-        .default(3)
-        .describe("Model tier for planning (1-5). Default 3 (GPT-5.6 Sol xhigh, codex, hard read-only). Planning benefits from a strong tier; level 5 is Opus max."),
-      ...routing,
-    },
-  },
-  // mode:'plan' → read-only por engine (codex -s read-only é o mais forte; cursor --mode plan). O
-  // planejador lê a codebase e propõe sem editar; o prompt reforça "não editar".
-  async ({ task, level, cwd, model, effort }) => {
-    const tier = resolveTier(level, hasEngine, CURSOR_ENABLED, currentEngineHealth());
-    return formatRun(
-      "plan",
-      tier.engine,
-      () => runCursor({
-        prompt: planPrompt(task) + budgetNote(DEFAULT_TIMEOUT_MS),
-        cwd,
-        engine: tier.engine,
-        model: model ?? tier.model,
-        effort: effort ?? tier.effort,
-        mode: "plan",
-        agentPrompt: withTerseStyle(),
-      }),
-      { requestedLevel: level, matchedRequest: isDefaultTierEngine(level, tier.engine) },
-    );
-  },
-);
-
-server.registerTool(
-  "build",
-  {
-    description:
-      "Phase 2 of plan→build: an executor model IMPLEMENTS an approved plan (typically the output of `plan`), with full tool access (edits + tests). Defaults to level 1 (GPT-5.6 Luna max on codex, cheapest) — the thinking is already done, so a cheap executor usually suffices. Optionally run as an `agent`. Returns a summary + session_id.",
-    inputSchema: {
-      plan: z.string().describe("The approved plan to implement (typically the `plan` tool output)."),
-      level: z
-        .number()
-        .int()
-        .min(1)
-        .max(5)
-        .optional()
-        .describe("Executor tier (1-5). Default 1 (GPT-5.6 Luna max, codex, cheapest). Raise only for harder implementations."),
-      agent: agentSchema.optional().describe(agentDescription),
-      timeout_ms: z
-        .number()
-        .int()
-        .positive()
-        .optional()
-        .describe("Max wall-clock ms. Default 1800000 (30 min). Raise for unusually long build-heavy tasks."),
-      ...routing,
-    },
-  },
-  async ({ plan, level, agent, timeout_ms, cwd, model, effort }) => {
-    const requestedLevel = level ?? 1;
-    const tier = resolveTier(requestedLevel, hasEngine, CURSOR_ENABLED, currentEngineHealth());
-    const resolved = agent ? resolveAgent(agent, cwd ?? process.cwd()) : undefined;
-    return formatRun(
-      "build",
-      tier.engine,
-      () => runCursor({
-        prompt: buildPrompt(plan) + budgetNote(timeout_ms ?? DEFAULT_TIMEOUT_MS),
-        cwd,
-        engine: tier.engine,
-        model: model ?? tier.model,
-        effort: effort ?? tier.effort,
-        agentPrompt: withTerseStyle(resolved?.prompt),
-        force: true,
-        timeoutMs: timeout_ms,
-      }),
-      { requestedLevel, matchedRequest: isDefaultTierEngine(requestedLevel, tier.engine) },
-    );
+    const { engine, model: auxModel } = resolveAuxTool("web_lookup", { engine: engineParam, model });
+    return format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine, model: auxModel, effort, mode: "ask", web: true, agentPrompt: withTerseStyle(), tool: "web_lookup" }));
   },
 );
 
@@ -394,7 +337,7 @@ server.registerTool(
   async ({ prompt, levels, mode, cwd }) => {
     const tiers = levels.map((level) => ({ level, tier: resolveTier(level) }));
     const runs = tiers.map(({ level, tier }) =>
-      runCursor({ prompt, cwd, engine: tier.engine, model: tier.model, effort: tier.effort, force: true })
+      runCursor({ prompt, cwd, engine: tier.engine, model: tier.model, effort: tier.effort, force: true, tool: "fan_out" })
         .then((res) => ({ level, tier, res })),
     );
 
@@ -416,6 +359,7 @@ server.registerTool(
       model: EXPLORE_MODEL,
       mode: "ask",
       agentPrompt: withTerseStyle(),
+      tool: "fan_out",
     });
     const footer = outputs
       .map((o) => `- ${o.engine} (level ${o.level})${o.sessionId ? `: ${formatSessionHandle(o.engine as Engine, o.sessionId)}` : o.error ? ": FAILED" : ": no session_id"}`)
@@ -461,7 +405,7 @@ server.registerTool(
     if (eng === "grok") {
       return format(
         "generate_image",
-        await runCursor({ prompt, cwd, engine: "grok", force: true }),
+        await runCursor({ prompt, cwd, engine: "grok", force: true, tool: "generate_image" }),
       );
     }
     return format(
@@ -474,6 +418,7 @@ server.registerTool(
         effort: "low",
         force: true,
         images: input_images,
+        tool: "generate_image",
       }),
     );
   },
@@ -485,7 +430,7 @@ server.registerTool(
     description:
       "Continue a previous Cursor session by session_id (returned by every other tool). The prior context lives on Cursor's side, so you don't resend it. When continuing a read-only session (explore/read_slice/web_lookup), pass mode:'ask' to keep it read-only — otherwise the resumed run regains full tool access.",
     inputSchema: {
-      session_id: z.string().describe("The session id returned by a previous cursor-mcp-bridge call."),
+      session_id: z.string().describe("The session id returned by a previous polyagent-mcp call."),
       question: z.string().describe("The follow-up question."),
       mode: z
         .enum(["plan", "ask"])
@@ -500,7 +445,7 @@ server.registerTool(
     const { engine, id } = parseSessionHandle(session_id);
     return format(
       "follow_up",
-      await runCursor({ prompt: question, engine, resume: id, mode, cwd, model, effort, force: true, agentPrompt: withTerseStyle() }),
+      await runCursor({ prompt: question, engine, resume: id, mode, cwd, model, effort, force: true, agentPrompt: withTerseStyle(), tool: "follow_up" }),
     );
   },
 );
@@ -509,7 +454,7 @@ server.registerTool(
   "bridge_stats",
   {
     description:
-      "Report this bridge's usage: calls and chars returned to context per tool (the real cost). Requires CURSOR_BRIDGE_LOG to be set so calls are logged; otherwise reports that logging is off.",
+      "Report this bridge's usage: calls and chars returned to context per tool (the real cost). Requires POLYAGENT_LOG to be set so calls are logged; otherwise reports that logging is off.",
     inputSchema: {},
   },
   async () => {
@@ -518,7 +463,7 @@ server.registerTool(
     if (!tools.length) {
       return {
         content: [
-          { type: "text" as const, text: "No usage logged. Set CURSOR_BRIDGE_LOG=/path/to/log.jsonl to enable logging." },
+          { type: "text" as const, text: "No usage logged. Set POLYAGENT_LOG=/path/to/log.jsonl to enable logging." },
         ],
       };
     }
@@ -528,6 +473,9 @@ server.registerTool(
     return { content: [{ type: "text" as const, text: lines.join("\n") }] };
   },
 );
+
+// Falha cedo se o sandbox obrigatório não puder ser montado — melhor não subir do que subir degradado.
+sandboxPreflight();
 
 const transport = new StdioServerTransport();
 await server.connect(transport);

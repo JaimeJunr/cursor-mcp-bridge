@@ -21,10 +21,10 @@ export interface ResolvedAgent {
 /** Entrada do param `agent`: um nome (resolve no host) ou um objeto inline (usa direto, sem FS). */
 export type AgentInput = string | { prompt: string; name?: string; model?: string };
 
-/** Roots onde procurar arquivos de agent (.md), na ordem. Extra via CURSOR_BRIDGE_AGENT_PATHS (`:`). */
+/** Roots onde procurar arquivos de agent (.md), na ordem. Extra via POLYAGENT_AGENT_PATHS (`:`). */
 export function agentRoots(cwd: string): string[] {
   const home = process.env.HOME ?? homedir();
-  const extra = (process.env.CURSOR_BRIDGE_AGENT_PATHS ?? "")
+  const extra = (process.env.POLYAGENT_AGENT_PATHS ?? "")
     .split(":").map((p) => p.trim()).filter(Boolean);
   const containedRoot = (root: string, parent: string): string | undefined => {
     try {
@@ -133,6 +133,6 @@ export function resolveAgent(input: AgentInput, cwd: string): ResolvedAgent {
   }
   throw new Error(
     `agent '${input}' not found. Searched .claude/agents (project + home) and ~/.claude/plugins. ` +
-    "Add roots via CURSOR_BRIDGE_AGENT_PATHS, or pass an inline { prompt } object.",
+    "Add roots via POLYAGENT_AGENT_PATHS, or pass an inline { prompt } object.",
   );
 }

@@ -415,6 +415,14 @@ describe("buildCodexArgs", () => {
     expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
+  it("mode:'plan' (homônimo da tool removida) continua virando -s read-only no codex", () => {
+    // RunOpts.mode é o modo read-only do codex, NÃO a tool `plan` (removida na US-003):
+    // explore/read_slice seguem dependendo dele.
+    const args = buildCodexArgs({ prompt: "map it", model: "gpt-5.6-luna", mode: "plan" });
+    expect(args[args.indexOf("-s") + 1]).toBe("read-only");
+    expect(args).toContain('approval_policy="never"');
+  });
+
   it("read-only (mode) SOB bwrap externo (sandboxed) usa bypass, NÃO -s read-only (evita nested namespace)", () => {
     // Regressão: `codex -s read-only` cria um sandbox interno; aninhado dentro do bwrap do bridge ele
     // quebra com "bwrap: No permissions to create new namespace". Com bwrap externo o read-only vem

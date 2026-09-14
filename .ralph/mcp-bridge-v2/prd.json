@@ -1,0 +1,204 @@
+{
+  "project": "polyagent-mcp",
+  "branchName": "ralph/polyagent-rebrand-engine-independence",
+  "description": "Rebrand de cursor-mcp-bridge para polyagent-mcp, remoção das tools plan/build, e desacoplamento das tools auxiliares do codex (config por tool, matriz de capacidade, classificação de cota e sandbox obrigatório).",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Renomear identidade pública para polyagent-mcp",
+      "description": "Como mantenedor, quero a identidade pública renomeada para polyagent-mcp, para que o nome descreva a frota multi-engine em vez de um vendor que virou fallback.",
+      "acceptanceCriteria": [
+        "package.json e package-lock.json têm name: \"polyagent-mcp\"; bin mapeia polyagent-mcp; description cita codex/grok/claude e põe Cursor como fallback opt-in.",
+        "new McpServer({ name: \"polyagent-mcp\" }) em src/index.ts:25.",
+        "O alias de registro do server no host passa a ser polyagent, documentado em INSTALL.md — é ele que define o prefixo mcp__<alias>__* das tools, independente do McpServer.name.",
+        "README.md e INSTALL.md nomeiam os três engines nativos nas 3 primeiras linhas.",
+        "O nome antigo sobrevive apenas nos comandos de clone do README, onde nomeia o repositório real (que não é renomeado — ver Non-Goals); em qualquer outro contexto, zero ocorrências.",
+        "Typecheck passes (npm run build)."
+      ],
+      "priority": 1,
+      "difficulty": "medium",
+      "profile": "general",
+      "blockedBy": [],
+      "jiraKey": null,
+      "repo": null,
+      "passes": true,
+      "notes": "Fonte: prd-update-1.html (tier update, herda full). Spike: spikes/quota-patterns.md (ver ADENDO). Commit 3cbddac. GATE 6 depth-loop PASS (tdr: genuine; aderência: APPROVE WITH SUGGESTIONS, 0 blockers)."
+    },
+    {
+      "id": "US-003",
+      "title": "Remover as tools plan e build",
+      "description": "Como usuário do bridge, quero as tools plan e build removidas, para que o inventário só ofereça o que realmente se usa.",
+      "acceptanceCriteria": [
+        "As registrações de plan (index.ts:293) e build (index.ts:331) saem; o server passa de 12 para 10 registerTool.",
+        "planPrompt/buildPrompt saem de prompts.ts e seus testes de test/prompts.test.ts.",
+        "A string instructions do McpServer (index.ts:28) perde \"Two-phase work: plan to build\" — ela carrega no startup e é load-bearing para adoção.",
+        "O tipo RunOpts.mode: \"plan\" | \"ask\" (cli.ts:286) e ExploreMode (prompts.ts:86) permanecem intactos — são o modo read-only do codex, homônimos da tool removida.",
+        "Um teste cobre que buildCodexArgs com mode: \"plan\" ainda emite -s read-only após a remoção.",
+        "README lista as dez tools finais pelo nome — hoje ele diz \"ten tools\" mas lista plan/build e omite fast_delegate/fan_out (README.md:13). CLAUDE.md idem, incluindo a seção de invariantes.",
+        "Typecheck passes e npm test verde."
+      ],
+      "priority": 2,
+      "difficulty": "low",
+      "profile": "general",
+      "blockedBy": [],
+      "jiraKey": null,
+      "repo": null,
+      "passes": true,
+      "notes": "Fonte: prd-update-1.html (tier update, herda full). Spike: spikes/quota-patterns.md (ver ADENDO). Commit ce6b6d0. GATE 6 depth-loop PASS (tdr: genuine; aderência: APROVA, 0 blockers, 1 nit LOW não-bloqueante)."
+    },
+    {
+      "id": "US-002",
+      "title": "Renomear env vars CURSOR_BRIDGE_* para POLYAGENT_* (corte limpo)",
+      "description": "Como operador do server, quero as variáveis de ambiente renomeadas para POLYAGENT_* em corte limpo, para que a configuração não carregue o nome antigo.",
+      "acceptanceCriteria": [
+        "As 16 vars CURSOR_BRIDGE_* viram POLYAGENT_* mantendo o sufixo; CURSOR_BIN vira POLYAGENT_CURSOR_BIN. Total: 17 renomeações.",
+        "CURSOR_ENABLED (cli.ts:83) e CURSOR_BRIDGE_MARKER (hook:110) são consts derivadas, não env vars — renomeiam como identificadores, sem entrar na tabela de migração.",
+        "\"cursor\" sobrevive só onde nomeia o engine de fato (POLYAGENT_CURSOR_BIN, POLYAGENT_ENABLE_CURSOR).",
+        "Nenhum fallback para o nome antigo; ler a var velha não tem efeito.",
+        "As vars cross-cutting seguem concentradas em consts de módulo em cli.ts/usage.ts; agents.ts e o hook mantêm a leitura da própria config, como hoje.",
+        "README traz a tabela nome-antigo para nome-novo, marcada como breaking change.",
+        "Typecheck passes."
+      ],
+      "priority": 3,
+      "difficulty": "medium",
+      "profile": "general",
+      "blockedBy": [
+        "US-001"
+      ],
+      "jiraKey": null,
+      "repo": null,
+      "passes": true,
+      "notes": "Fonte: prd-update-1.html. Commit 2112ba6. GATE 1: 222/222 | GATE 2: n/a (sem linter) | GATE 3: tsc exit 0 | GATE 4: n/a (sem threshold) | GATE 5: 2112ba6 | GATE 6: depth-loop PASS (qa-reviewer APPROVE WITH SUGGESTIONS, 0 blockers, 1 nit LOW sobre nomenclatura do const POLYAGENT_CURSOR_BIN). NOTA DE PROVENIENCIA: o worker do ralph completou implementacao, commit e review, mas bateu no session limit do claude ANTES de registrar passes/gates. Marcado manualmente em 2026-09-14 apos re-verificacao independente dos gates (tsc + vitest rodados de novo) e dos ACs 1/2/4/6 por grep sobre o commit."
+    },
+    {
+      "id": "US-005",
+      "title": "Preservar stdout/stderr/exitCode no erro de processo",
+      "description": "Como implementador, quero que a falha de processo preserve stdout, stderr e exit code separados, para que a causa do erro seja classificável — hoje ela é descartada.",
+      "acceptanceCriteria": [
+        "O erro lançado por runOnce (cli.ts:688-720) passa a carregar { stdout, stderr, exitCode } em vez de colapsar em stderr.trim() || stdout.trim(). O JSON estruturado dos CLIs sai em stdout e hoje se perde sempre que stderr tem qualquer conteúdo.",
+        "A mensagem de erro visível ao chamador não regride: quem só lê error.message continua vendo o mesmo texto de antes.",
+        "isCodexEnvError continua funcionando sobre stderr, sem mudança de comportamento nem no FALLBACK_ENGINE_ORDER.",
+        "Teste cobre o caso que hoje falha: exit não-zero com stderr não-vazio E stdout com JSON de erro — ambos chegam ao chamador.",
+        "Typecheck passes e npm test verde."
+      ],
+      "priority": 4,
+      "difficulty": "medium",
+      "profile": "specialist",
+      "blockedBy": [
+        "US-002"
+      ],
+      "jiraKey": null,
+      "repo": null,
+      "passes": true,
+      "notes": "ProcessError exportada em cli.ts carrega stdout/stderr/exitCode; message inalterada; fallback do codex intocado. Commit 8261947."
+    },
+    {
+      "id": "US-008",
+      "title": "Tornar o bwrap obrigatório (remover fallback gracioso)",
+      "description": "Como responsável pela segurança do bridge, quero o bwrap obrigatório, para que o read-only das tools auxiliares deixe de depender de uma condição silenciosa do host.",
+      "acceptanceCriteria": [
+        "O fallback gracioso some. Hoje, sem bwrap no PATH, runOnce apenas escreve um aviso em stderr e roda sem sandbox (cli.ts:681-685) — aviso que o chamador MCP não vê.",
+        "Na inicialização, a ausência de bwrap faz o server falhar com erro nomeando o remédio (sudo apt install bubblewrap), em vez de subir degradado.",
+        "POLYAGENT_SANDBOX=off continua desligando o sandbox por escolha explícita do operador; o que deixa de existir é a degradação implícita por binário ausente.",
+        "Com o sandbox desligado por escolha explícita, as três tools read-only (explore, read_slice, web_lookup) só aceitam codex — o único engine com read-only próprio. Qualquer outro engine é recusado nomeando o motivo.",
+        "README e INSTALL.md listam o bubblewrap como pré-requisito de instalação, não como recomendação.",
+        "Teste cobre os três caminhos: bwrap presente (roda), bwrap ausente (falha nomeando o remédio), sandbox desligado por env com engine não-codex numa tool read-only (recusa).",
+        "Typecheck passes e npm test verde."
+      ],
+      "priority": 5,
+      "difficulty": "medium",
+      "profile": "specialist",
+      "blockedBy": [
+        "US-002"
+      ],
+      "jiraKey": null,
+      "repo": null,
+      "passes": true,
+      "notes": "GATE 1-6 verdes. commit a2f97ff. TDR validated=yes mechanism=genuine; qa-reviewer APROVA COM SUGESTOES (0 blockers, 3 LOW)."
+    },
+    {
+      "id": "US-004",
+      "title": "Config de engine e modelo por tool auxiliar + matriz de capacidade",
+      "description": "Como operador, quero escolher engine e modelo por tool auxiliar, via env e por chamada, para que cada uma rode onde faz sentido em vez de todas no codex.",
+      "acceptanceCriteria": [
+        "Cada uma das quatro tools lê seu par próprio de env: POLYAGENT_<TOOL>_ENGINE e POLYAGENT_<TOOL>_MODEL, para EXPLORE, READ_SLICE, RUN_FILTERED e WEB_LOOKUP.",
+        "O parâmetro engine opcional entra apenas no inputSchema das quatro tools auxiliares — nunca no objeto routing (index.ts:33), que é spread via ...routing em 10 registrações e daria engine também ao delegate, fan_out e follow_up.",
+        "Ordem de precedência, da maior para a menor: parâmetro da chamada, env específica da tool, default atual.",
+        "Sem nenhum override, as quatro mantêm o comportamento de hoje: engine codex, modelo gpt-5.6-luna.",
+        "Existe uma matriz de capacidade por engine declarada em código, com estes valores: web search só no codex (cli.ts:384) — grok e claude ignoram o campo web; read-only vem do sandbox bwrap para todos os engines (buildSandboxSpec(workspace, engine, !!mode) monta o workspace --ro-bind), e só o codex tem read-only adicional no nível do engine (-s read-only).",
+        "A matriz registra explicitamente que no nível do engine buildGrokArgs ignora mode e sempre emite --always-approve (cli.ts:356), e que no claude mode emite --dangerously-skip-permissions (cli.ts:425) — o oposto de read-only. Por isso o read-only fora do codex depende do sandbox, o que torna a US-008 pré-requisito desta.",
+        "A resolução recusa, com erro nomeando o motivo, um engine que não atenda o requisito da tool: read-only para explore/read_slice/web_lookup, web search para web_lookup. Nunca degrada para acesso total em silêncio.",
+        "run_filtered aceita qualquer engine — já roda com force: true por desenho (index.ts:275), não é read-only.",
+        "A resolução é função pura em cli.ts, com teste unitário de precedência, engine inválida e recusa por capacidade.",
+        "Typecheck passes e npm test verde."
+      ],
+      "priority": 6,
+      "difficulty": "high",
+      "profile": "specialist",
+      "blockedBy": [
+        "US-002",
+        "US-008"
+      ],
+      "jiraKey": null,
+      "repo": null,
+      "passes": true,
+      "notes": "GATE1 253/253; GATE3 tsc limpo; GATE5 f986d41; GATE6 depth-loop PASS (TDR genuine, aderencia APROVA COM SUGESTOES 10/10 ACs 0 blockers). Carry-over p/ US-006: engine cursor aceito sem CURSOR_ENABLED (MEDIUM, nao coberto por AC)."
+    },
+    {
+      "id": "US-006",
+      "title": "Classificar cota esgotada e retornar erro acionável",
+      "description": "Como usuário, quero que cota esgotada retorne um erro acionável nomeando os engines disponíveis, para que eu decida a troca em vez de receber erro cru do CLI.",
+      "acceptanceCriteria": [
+        "classifyQuotaError({ stdout, stderr, exitCode }, engine) é função pura em cli.ts e retorna \"quota_exhausted\" | \"rate_limited\" | null. A assinatura recebe os três streams porque o sinal vive em stdout, não em stderr (ver spike).",
+        "A classificação lê primeiro campos JSON estruturados e só depois aplica regex sobre as mensagens de erro extraídas. Fonte dos padrões: spikes/quota-patterns.md, incluindo o adendo de 13/09/2026, que corrige o grok.",
+        "Para o grok, o sinal é http_status: 402 e a string Grok Build usage balance exhausted — observados em runtime. O 429/-32003 do fonte oficial classifica rate_limited, não quota_exhausted.",
+        "O parser desaninha JSON serializado dentro de string: no grok o http_status chega dentro de errors[0] como texto, não como campo de primeiro nível.",
+        "Um padrão que não casa retorna null e a falha propaga crua, como hoje. Nunca adivinhar a causa — classificar errado é pior que não classificar.",
+        "exitCode === 0 nunca classifica como cota — guarda contra uma resposta bem-sucedida que apenas mencione essas mensagens.",
+        "rate_limited (throttle transitório) é distinto de quota_exhausted (cota do plano acabou). Trocar de engine resolve o segundo; o primeiro pede espera — e sua mensagem diz exatamente isso, sem sugerir troca de engine.",
+        "Teste por engine com fixtures de stdout por engine, com origem distinta e declarada: grok usa o payload real capturado em 13/09/2026 (adendo do spike); codex e claude usam as mensagens canônicas do fonte/binário, sem captura — e o teste deixa essa diferença explícita, cobrindo os dois tipos e o caso negativo.",
+        "Ao classificar cota, a chamada falha com <engine> quota exhausted — available engines: <lista> — retry with engine:\"<sugestão>\". Nunca retenta sozinha.",
+        "A lista vem de hasEngine(), exclui o que estourou, respeita POLYAGENT_ENABLE_CURSOR e é intersectada com a matriz de capacidade da US-004 — nunca sugerir um engine que a resolução daquela tool recusaria. Sem nenhum candidato válido, o erro diz isso em vez de sugerir lista vazia.",
+        "Vale para todas as tools que passam por runCursor, delegate incluído. Onde a tool expõe engine (as quatro auxiliares), a sugestão é esse parâmetro. No delegate, que não o expõe, a sugestão é o menor level de 1 a 5 cujo engine primário ainda está disponível. Em fast_delegate, fan_out e generate_image a mensagem informa a cota sem sugerir parâmetro; em follow_up informa que o engine está preso à sessão retomada.",
+        "Cota é distinta de isCodexEnvError: só a de ambiente cai no FALLBACK_ENGINE_ORDER automático.",
+        "usage.ts registra cota com outcome próprio e computeEngineHealth o ignora explicitamente — hoje qualquer outcome que não seja failure/timeout conta como sucesso (usage.ts:130), o que inflaria o health de um engine sem cota.",
+        "Typecheck passes e npm test verde."
+      ],
+      "priority": 7,
+      "difficulty": "high",
+      "profile": "specialist",
+      "blockedBy": [
+        "US-004",
+        "US-005"
+      ],
+      "jiraKey": null,
+      "repo": null,
+      "passes": true,
+      "notes": "Fonte: prd-update-1.html (tier update, herda full). Spike: spikes/quota-patterns.md (ver ADENDO). Commits cf1dbec + d2b3ea2. GATE 6 depth-loop PASS."
+    },
+    {
+      "id": "US-007",
+      "title": "Renomear o hook para prefer-polyagent.mjs",
+      "description": "Como operador, quero o hook renomeado e coerente com a nova identidade, para que a configuração do host não aponte para um caminho inexistente.",
+      "acceptanceCriteria": [
+        "hooks/prefer-cursor-bridge.mjs vira hooks/prefer-polyagent.mjs; test/hook.test.ts importa o caminho novo.",
+        "As strings de nudge/redirect citam o alias novo do server e as tools por nome, sem referenciar plan/build.",
+        "README e INSTALL.md documentam o novo caminho no settings.json do host como breaking change, junto da tabela de env da US-002.",
+        "Os 3 pontos de entrada (PreToolUse, SessionStart, SubagentStart) seguem fail-open: qualquer erro imprime nada e sai 0.",
+        "A dedup por sessão continua gravando a chave antes de emitir, preservando o comportamento one-shot fail-open.",
+        "Typecheck passes e npm test verde."
+      ],
+      "priority": 8,
+      "difficulty": "low",
+      "profile": "general",
+      "blockedBy": [
+        "US-001",
+        "US-002"
+      ],
+      "jiraKey": null,
+      "repo": null,
+      "passes": true,
+      "notes": "Fonte: prd-update-1.html (tier update, herda full). Spike: spikes/quota-patterns.md (ver ADENDO)."
+    }
+  ]
+}

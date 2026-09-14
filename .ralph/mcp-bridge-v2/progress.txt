@@ -1,0 +1,112 @@
+# Ralph Progress Log
+Started: dom 13 set 2026 22:32:27 -03
+---
+
+## 2026-09-13 - US-001
+- Renomeado package.json/package-lock.json (name, bin) e new McpServer em src/index.ts para "polyagent-mcp"; instructions string e a descrição de session_id do follow_up também deixaram de citar "cursor-mcp-bridge".
+- README.md/INSTALL.md: título, alias de registro do server no host (cursor-bridge → polyagent) em todos os comandos `mcp add`/blocos mcpServers/TOML, e prefixo de permissão mcp__cursor-bridge__* → mcp__polyagent__*. INSTALL.md ganhou frase explícita "the server registers under the host alias polyagent" e menção aos 3 engines no primeiro parágrafo.
+- Deixado intocado por escopo: env vars CURSOR_BRIDGE_* (US-002), tools plan/build e menções a elas (US-003), nome/caminho do hook prefer-cursor-bridge.mjs e seu texto (US-007), repositório GitHub em si (Non-Goals) — os comandos de clone continuam citando cursor-mcp-bridge de propósito.
+- Teste novo test/branding.test.ts (RED confirmado antes da implementação, GREEN depois) trava os 3 pontos centrais do rename.
+- GATE 1 (209/209 verde), GATE 3 (tsc limpo). GATE 2/4 (lint/coverage) não configurados no projeto — pulados com nota, como já era o caso antes desta story.
+- GATE 5: commit 3cbddac.
+- GATE 6 (depth-loop, review-first): TDR via quati-revisor:tdr-runner → validated=yes mechanism=genuine (provado revertendo package.json e observando o teste falhar). Aderência via quati-revisor:qa-reviewer → APPROVE WITH SUGGESTIONS, 0 blockers (1 nota LOW sobre leftovers de "cursor-bridge" em cli.ts/hook, corretamente atribuídos a US-002/US-007, fora de escopo).
+- Learnings:
+  - O AC "alias de registro do server no host" (mcp__<alias>__*) é distinto do McpServer.name/package name — vale documentar essa distinção explicitamente onde aparecer (útil pro leitor do INSTALL.md).
+  - subagent_type do tdr-runner via Agent tool precisa do prefixo do plugin: "quati-revisor:tdr-runner", não "tdr-runner" puro.
+---
+
+## 2026-09-14 - US-003
+- Removidas as tools plan e build (registerTool blocks) de src/index.ts; server passa de 12 para 10 registrations. planPrompt/buildPrompt removidos de src/prompts.ts e test/prompts.test.ts. Instructions do McpServer perdem "Two-phase work: plan → build".
+- RunOpts.mode ("plan"|"ask") em cli.ts e ExploreMode em prompts.ts preservados intactos (homônimos da tool removida) — teste novo confirma buildCodexArgs({mode:"plan"}) ainda emite -s read-only.
+- test/tools.test.ts (novo, 5 testes) trava o contrato: 10 registerTool, sem plan/build, instructions sem "Two-phase work", prompts sem planPrompt/buildPrompt, README com a tabela correta.
+- README.md e CLAUDE.md atualizados: README lista as 10 tools reais (incluindo fast_delegate/fan_out que faltavam); CLAUDE.md resolve todos os blocos 🔄 [US-003], deixando intactos os marcadores de outras stories (US-002/004/005/006/007/008).
+- Implementado via delegate(level=5, claude) — codex (level 1) falhou no spawn (stdin), grok (level 2) com cota esgotada (402 Grok Build usage balance exhausted).
+- GATE 1: 213/213 testes verdes | GATE 2/3: lint não configurado / tsc limpo | GATE 4: coverage não configurado | GATE 5: commit ce6b6d077502adb56c97be2de12fd0973e2d028e | GATE 6: depth-loop PASS (tdr-runner: validated=yes mechanism=genuine, mutation test confirmou guard load-bearing; qa-reviewer: APROVA, 0 blockers, 1 nit LOW não-bloqueante sobre prosa residual no README linha 4).
+- Learnings:
+  - Grok (level 2/4) pode estar com cota esgotada (402) — nesse caso pular direto pra outro level em vez de retry cego. Codex (level 1/3) pode falhar no spawn por stdin ("Reading additional input from stdin...") — sintoma já documentado no CLAUDE.md do projeto (US-008/sandbox), não específico desta story.
+  - Resolution: nenhuma ambiguidade — ACs claros, seguiu-se CLAUDE.md do projeto e o PRD ao pé da letra.
+---
+
+## 2026-09-14 - US-002 (registro manual)
+- Commit 2112ba6 ja existia, review aprovado; worker morreu no session limit do claude antes de gravar.
+- Gates re-verificados independentemente: tsc exit 0, vitest 222/222, ACs 1/2/4/6 por grep no commit.
+- Nenhum codigo novo escrito neste registro.
+
+## 2026-09-14 - US-005
+- Nova classe exportada ProcessError em src/cli.ts (message, stdout, stderr, exitCode readonly); o reject do handler `close` de runOnce passa a lançá-la em vez de Error, sem tocar na string da message.
+- Bloco de fallback de engine (isCodexEnvError sobre message + FALLBACK_ENGINE_ORDER) deixado byte-a-byte idêntico ao commit pai — AC 3 é preservado por inação deliberada, NÃO por trocar para err.stderr (essa migração é candidata da US-006).
+- Não tocados: reject de timeout e de falha de spawn (continuam Error simples) — a story fala de erro de processo (exit != 0).
+- test/process-error.test.ts (novo, 4 testes) mocka node:child_process com child fake; cobre exit!=0 com stderr não-vazio E stdout com JSON de erro, não-regressão da message, ramo stderr-vazio e o fallback do codex.
+- CLAUDE.md: marcador 🔄 [US-005] resolvido (invariante reescrito no presente, citando ProcessError).
+- GATE 1: 226/226 | GATE 2: lint não configurado (n/a) | GATE 3: tsc limpo | GATE 4: coverage não configurado (n/a) | GATE 5: commit 82619471274c6666abf98b39c444cc13372a70f3 | GATE 6: depth-loop PASS (tdr-runner validated=yes mechanism=genuine com mutation test; qa-reviewer APROVA COM SUGESTÕES, 0 blockers, 5/5 ACs).
+- Learnings:
+  - Testar runCursor sem spawnar de verdade: `vi.mock("node:child_process")` + child fake (EventEmitter com stdout/stderr/kill) e `process.env.POLYAGENT_SANDBOX = "off"` ANTES do `await import("../src/cli.js")` — os consts de env são lidos no load do módulo.
+  - hasEngine/binExists varrem o PATH real em tempo de chamada: qualquer teste que exercite o fallback de engine precisa stubar process.env.PATH com um dir fake, senão passa/falha conforme os CLIs instalados na máquina.
+  - Resolution: nenhuma ambiguidade — ACs explícitos, seguiu-se o CLAUDE.md do projeto.
+---
+
+## 2026-09-14 - US-008
+- src/cli.ts: novas exportadas sandboxPreflight(sandboxOn = SANDBOX_ON) e assertReadOnlyEngine(tool, engine, sandboxOn = SANDBOX_ON), mais a const única BWRAP_MISSING. O ramo `else if (SANDBOX_ON)` de runOnce deixou de escrever aviso em stderr e passou a `return Promise.reject(new Error(BWRAP_MISSING))` — reject, não throw síncrono, porque runCursor encadeia .catch() sobre o retorno de runOnce (throw síncrono escaparia do fallback de engine).
+- src/index.ts: sandboxPreflight() chamado logo antes de `new StdioServerTransport()`/server.connect (falha na inicialização em vez de subir degradado); os 3 handlers read-only (explore/read_slice/web_lookup) passaram a declarar `const engine: Engine = "codex"` e chamar assertReadOnlyEngine(<tool>, engine). O handler de web_lookup virou bloco (era arrow de expressão).
+- README.md: bubblewrap entra em Requirements como **required**, not recommended; a linha de POLYAGENT_SANDBOX na tabela de env perdeu "falls back to unsandboxed" e ganhou a regra do read-only só-codex. INSTALL.md: `bwrap --version` no bloco de prerequisites + "stop and report" se faltar.
+- CLAUDE.md: marcador 🔄 [US-008] resolvido (invariante do sandbox reescrito no presente, citando sandboxPreflight/BWRAP_MISSING/assertReadOnlyEngine); o invariante compartilhado com US-004 perdeu a menção a US-008 e agora aponta o guard como base para a US-004.
+- test/sandbox-required.test.ts (novo, 8 testes): bwrap presente (spawn recebe o bwrap fake), ausente (rejeita nomeando o remédio e nunca chama spawn), preflight nos dois sentidos, e o guard read-only com sandbox off.
+- GATE 1: 234/234 | GATE 2: lint não configurado (n/a) | GATE 3: tsc limpo | GATE 4: coverage não configurado (n/a) | GATE 5: commit a2f97ff49edc95b642acb5256a8e111c7394f484 | GATE 6: depth-loop PASS (tdr-runner validated=yes mechanism=genuine, mutação dos 3 guards derrubou o teste correspondente em cada caso; qa-reviewer APROVA COM SUGESTÕES, 0 blockers, 7/7 ACs, sem vazamento da US-004).
+- Learnings:
+  - Testar o bwrap sem instalá-lo: stubar process.env.PATH com um mkdtemp e (quando o caminho "presente" for o alvo) escrever um arquivo `bwrap` nele. bwrapPath() lê o PATH em call time, então dá pra alternar por teste sem remontar o módulo — diferente de SANDBOX_ON, que é const de load do módulo (por isso os guards recebem `sandboxOn` como parâmetro com default).
+  - Child fake + engine "codex" não combina: codex usa parseCodexJsonl, então um fake `{result, session_id}` não é lido. Para testes de spawn que não são sobre o parser, use engine "claude" (parseCliJson).
+  - Achados LOW do review, candidatos naturais da US-004 (não corrigidos aqui por escopo): (a) assertReadOnlyEngine é inalcançável enquanto o engine das 3 tools for literal "codex" — vira efetivo quando a US-004 tornar o engine variável; (b) follow_up com mode + engine vindo do session handle não passa pelo guard; (c) o teste novo (como test/process-error.test.ts) muta process.env.PATH global — o reviewer observou 1 falha em 29 execuções da suíte completa, não reproduzida em 28 tentativas; se virar flake de CI, injetar o PATH nas funções puras em vez de mutar o global.
+  - Resolution: nenhuma ambiguidade — ACs explícitos, seguiu-se o CLAUDE.md do projeto.
+---
+
+## 2026-09-14 - US-004
+- src/cli.ts: nova matriz `ENGINE_CAPABILITIES` (webSearch / engineReadOnly / sandboxReadOnly / modeAtEngineLevel por engine), `AUX_TOOL_REQUIREMENTS` (o que cada tool auxiliar exige), `AUX_TOOL_ENV` (prefixo do par de env por tool) e a função pura `resolveAuxTool(tool, params, env, sandboxOn)`. `EXPLORE_MODEL_FALLBACK` extraído do const `EXPLORE_MODEL` para que o default de modelo seja injetável via `env` na função pura.
+- src/index.ts: as quatro auxiliares (explore, read_slice, run_filtered, web_lookup) declaram `engine` no PRÓPRIO inputSchema (nunca no objeto `routing`, spread em 10 registrações) e resolvem engine/modelo por `resolveAuxTool`. O `const engine: Engine = "codex"` + `assertReadOnlyEngine(...)` inline saiu dos handlers — o guard agora é chamado de dentro do resolver, um único caminho.
+- Precedência: parâmetro da chamada > POLYAGENT_<TOOL>_ENGINE/_MODEL > default (codex + gpt-5.6-luna). `POLYAGENT_EXPLORE_MODEL` segue valendo como default de modelo das quatro, e `POLYAGENT_EXPLORE_ENGINE`/`_MODEL` passam a ser também a env específica da tool `explore` — os dois papéis coexistem sem quebra de compatibilidade.
+- Decisão de projeto NÃO explicitada nos ACs (julgada razoável pelo qa-reviewer): com engine não-codex e nenhum modelo definido, o resolver devolve `model: undefined` em vez de `gpt-5.6-luna` (id de codex, quebraria em grok/claude); os quatro arg builders só empurram a flag de modelo sob `if (opts.model)`, então o CLI usa o próprio default.
+- README.md: duas linhas novas na tabela de env (`POLYAGENT_<TOOL>_ENGINE` / `_MODEL`). CLAUDE.md: os dois marcadores 🔄 [US-004] resolvidos (invariantes reescritos no presente citando ENGINE_CAPABILITIES/resolveAuxTool/AUX_TOOL_REQUIREMENTS) e `resolveAuxTool()` entrou na lista de funções puras de cli.ts.
+- test/aux-engine.test.ts (novo, 19 testes): matriz, precedência nos dois sentidos, não-vazamento de env entre tools, engine inválida por parâmetro e por env, recusa por read-only (sandbox off) e por web search, run_filtered com qualquer engine, e três guards de superfície sobre o texto-fonte de index.ts (routing sem `engine`, as quatro com `engine` no schema, 4 chamadas a resolveAuxTool).
+- GATE 1: 253/253 | GATE 2: lint não configurado (n/a) | GATE 3: tsc limpo | GATE 4: coverage não configurado (n/a) | GATE 5: commit f986d4173258544d9c9331df988965c951168a1c | GATE 6: depth-loop PASS (tdr-runner validated=yes mechanism=genuine — 7 mutações, cada uma derrubou pelo menos um teste, nenhuma passou despercebida; qa-reviewer APROVA COM SUGESTÕES, 10/10 ACs, 0 blockers).
+- Achados do review NÃO corrigidos aqui (nenhum é blocker, nenhum falha AC):
+  - [MEDIUM] as quatro auxiliares passaram a aceitar `engine: "cursor"` sem consultar `CURSOR_ENABLED`, furando o invariante do CLAUDE.md ("cursor só com POLYAGENT_ENABLE_CURSOR=1") que `resolveTier`/`resolveFastTier` respeitam. Carry-over natural para a US-006, cujo AC já manda a lista de engines sugeridos "respeitar POLYAGENT_ENABLE_CURSOR e ser intersectada com a matriz de capacidade da US-004". Conserto: injetar `cursorEnabled = CURSOR_ENABLED` como parâmetro do resolver e recusar cursor com a mensagem-padrão dos tier resolvers; remover/condicionar 'cursor' nas quatro descrições.
+  - [LOW] o resolver não checa `hasEngine` (engine ausente vira erro de spawn cru em vez da mensagem acionável que generate_image e os tier resolvers dão).
+  - [LOW] a descrição pré-existente de `routing.model` ("Cursor model id … Default 'auto'") ficou mais desalinhada agora que `model` é override sobre codex/grok/claude com default gpt-5.6-luna.
+- Learnings:
+  - Inserir campo novo num inputSchema por script de texto: ancorar no `...routing,` (última linha do objeto) e NÃO no `.describe(...)` de um campo — o `.describe` costuma ser elo do meio de uma cadeia `z.enum(...).optional().describe(...)`, e inserir antes dele parte a cadeia (TS1005). Sintoma: erro de sintaxe a ~4 linhas do ponto de inserção.
+  - Função pura com env injetável: assinatura `(..., env: NodeJS.ProcessEnv = process.env, sandboxOn = SANDBOX_ON)` mantém o call site do index.ts limpo e dá teste de precedência determinístico sem mutar `process.env` global (armadilha já registrada nas US-005/US-008).
+  - Quando um const de env é ao mesmo tempo o default global e a env específica de uma tool (`POLYAGENT_EXPLORE_MODEL`), extraia o literal para um `*_FALLBACK` e leia a env pelo objeto injetado — senão o default do resolver fica preso ao load do módulo e o teste não consegue variá-lo.
+  - Rodar tdr-runner (que MUTA a árvore) em paralelo com qa-reviewer (que lê a árvore) faz o reviewer ver worktree sujo transitório e desconfiar de bug inexistente. Ele reportou a anomalia corretamente e reverificou por `git show HEAD:`, mas em review futuro vale serializar os dois braços ou apontar o reviewer para o blob do commit.
+  - Resolution: nenhuma ambiguidade bloqueante — a única lacuna (modelo default com engine não-codex) foi resolvida por leitura do PRD html (.ralph/mcp-bridge-v2/prd-update-1.html, seção US-004) + AC 4, decisão registrada acima e validada no review.
+---
+
+## 2026-09-14 - US-006
+- src/cli.ts: bloco novo de cota — `classifyQuotaError({stdout, stderr, exitCode}, engine)` (pura, devolve "quota_exhausted"|"rate_limited"|null), classe `QuotaError` (kind/engine), `quotaCandidates(tool, exhausted, has, cursorEnabled, sandboxOn)`, `quotaErrorMessage(kind, engine, tool, candidates)`, helpers de parse (`parseJsonObjects`, `unnestJson`, `httpStatuses`, `collectStrings`) e as tabelas `QUOTA_PATTERNS`/`RATE_LIMIT_PATTERNS` por engine. `RunOpts` ganha `tool?: BridgeTool` — não muda execução, só a FORMA do erro.
+- `runCursor` converte ProcessError em QuotaError via `asQuotaError` (no caminho principal E no run de fallback de ambiente) e NUNCA retenta sozinha: o guard `isCodexEnvError` + FALLBACK_ENGINE_ORDER ficou byte-a-byte intacto.
+- Precedência de leitura do sinal: campos JSON estruturados de stdout primeiro, regex sobre as mensagens extraídas depois. O parser desaninha JSON serializado dentro de string — no grok o `http_status` chega como TEXTO dentro de `errors[0]`, não como campo de primeiro nível.
+- src/usage.ts: outcome próprio `"quota"` em UsageEntry; `classifyOutcome` o devolve para QuotaError reconhecendo pelo `name` (sem importar cli.ts, que lê env no load e spawna processo); `computeEngineHealth` o ignora com `continue` explícito — antes cairia no ramo "não é failure/timeout" e pontuaria 1, inflando o health do engine sem cota (usage.ts:130 do commit pai).
+- src/index.ts: as 11 chamadas a runCursor (10 tools) declaram `tool: "<nome>"`.
+- test/quota.test.ts (27) e test/quota-wiring.test.ts (4): RED confirmado antes da implementação. Fixtures com ORIGEM declarada por engine — grok = payload real capturado em 13/09/2026 (adendo 1 do spike), codex = string do binário confirmada em runtime (adendo 2), claude = fonte/doc sem captura (única lacuna aberta). Cobrem cota, rate limit, o negativo de auth expirado (adendo 3) e o guard de exit 0.
+- CLAUDE.md: os dois marcadores 🔄 [US-006] resolvidos. README.md: seção nova "When an engine runs out of quota".
+- GATE 1: 284/284 | GATE 2: lint não configurado (n/a) | GATE 3: tsc limpo | GATE 4: coverage não configurado (n/a) | GATE 5: commits cf1dbec (story) + d2b3ea2 (correção dos LOW do review) | GATE 6: depth-loop PASS (tdr-runner validated=yes mechanism=genuine — 8 mutantes dirigidos, nenhum sobreviveu; qa-reviewer APROVA COM SUGESTÕES, 14/14 ACs, 0 blockers).
+- Correções aplicadas a partir do review (d2b3ea2), ambas dentro do escopo dos ACs 5/10:
+  - `quotaCandidates` devolvia `[]` incondicionalmente para generate_image, herdando a premissa "codex-only" do AC 11 — premissa que deixou de valer em e236eea, quando a tool passou a expor `engine: codex|grok`. Com o codex sem cota a mensagem afirmava "no other engine is available" enquanto `engine:"grok"` funcionaria. Agora a lista é restrita a `IMAGE_ENGINES` e a mensagem diz isso, ainda sem sugerir parâmetro (letra do AC 11).
+  - O guard de superfície casava `tool: "` solto no arquivo inteiro; passou a casar dentro do bloco do próprio `runCursor({…})`. Mutação manual (remover um `tool:`) confirmou que o guard novo derruba o teste.
+- Achado do review NÃO corrigido (fora do escopo, pré-existente): as quatro auxiliares chamam `format(...)` direto em vez de `formatRun`, então um QuotaError nelas nunca vira entrada `outcome:"quota"` no log. Não fere o AC 13 (o health só alimenta resolveTier/resolveFastTier, de delegate/fast_delegate), mas é cobertura que não existe. `CLAUDE.md:260` ainda diz "generate_image is codex-only" — já estava desatualizado antes desta story (e236eea).
+- Learnings:
+  - Um AC pode carregar premissa desatualizada do PRD selado. Aqui o AC 11 dizia "generate_image não sugere parâmetro" porque a tool era codex-only quando o PRD foi escrito. Cumprir a letra do AC produzindo uma mensagem FALSA seria pior: a saída foi honrar a letra (não sugerir parâmetro) e corrigir o fato (a lista de candidatos). Vale checar o código atual da tool antes de aceitar a premissa de um AC sobre ela.
+  - Teste de superfície que conta ocorrências de um token no arquivo inteiro é frouxo por construção — ancore no bloco da chamada (`/runCursor\(\{(?:[^{}]|\{[^{}]*\})*?\btool: "/gs`). Classe de caractere que exclui `)` não serve: `withTerseStyle()` aparece antes do campo em várias chamadas.
+  - usage.ts não deve importar cli.ts só para reconhecer um erro: `error.name === "QuotaError"` mantém usage.ts testável isolado (cli.ts lê env no load do módulo e é o único que spawna processo).
+  - Serializar tdr-runner (muta a árvore) e qa-reviewer (lê a árvore) funcionou — o reviewer viu árvore limpa, sem o falso "worktree sujo" registrado na US-004.
+  - Resolution: nenhuma ambiguidade bloqueante — ACs explícitos, spike com padrões e adendos como fonte de verdade, CLAUDE.md do projeto seguido.
+---
+
+## 2026-09-14 - US-007
+- git mv hooks/prefer-cursor-bridge.mjs → hooks/prefer-polyagent.mjs; todas as strings de prosa ("cursor-bridge available:", "cursor-bridge MCP...", JSDoc do topo) e os ids de tool nos ToolSearch selects (mcp__cursor-bridge__* → mcp__polyagent__*) atualizados no arquivo novo. CURSOR_BRIDGE_MARKER (constante exportada, valor "<cursor_bridge_preference>") preservado por compat, como já era o comentário original. seenPath() passou a gerar `polyagent-nudged-<session>` em vez de `cursor-bridge-nudged-<session>`.
+- test/hook.test.ts (import + fileURLToPath) e test/env-rename.test.ts atualizados para o caminho/prefixo novos.
+- README.md e INSTALL.md: caminho do hook nos exemplos de settings.json do host trocado; nota de breaking change adicionada logo junto da tabela de env CURSOR_BRIDGE_*→POLYAGENT_* já existente da US-002 (README.md, seção "Breaking change: env var rename"; INSTALL.md passo 5).
+- CLAUDE.md: bloco 🔄 [US-007] resolvido — seção do hook reescrita no presente citando hooks/prefer-polyagent.mjs, sem mais menção pendente a plan/build. `grep -n "🔄" CLAUDE.md` não retorna mais nada.
+- GATE 1: 284/284 | GATE 2: lint não configurado (n/a) | GATE 3: tsc limpo | GATE 4: coverage não configurado (n/a) | GATE 5: commit 503d31a6ec4d5d99cd5cef8672517b644fef3133 | GATE 6: depth-loop PASS (tdr-runner validated=yes mechanism=genuine — mutação da string mcp__polyagent__ derrubou o teste de sessionStartContext, e renomear o arquivo de volta quebrou o import; qa-reviewer APROVA COM SUGESTÕES, 6/6 ACs, 0 blockers, 1 nota LOW cosmética sobre o descritor "Cursor worker" remanescente em algumas strings de prosa, fora do escopo do AC 2 que só pedia o alias/nomes de tool corretos).
+- Achado LOW não corrigido aqui (cosmético, candidato a limpeza futura): `hooks/prefer-polyagent.mjs` ainda descreve o worker como "Cursor worker" em ~6 strings de prosa (linhas 48/60-61/69/84/95/113), o que contradiz a mesma string algumas linhas depois ("levels 2-5 escalate across grok/codex/claude"). O AC 2 exigia só o alias novo e os nomes de tool corretos (mcp__polyagent__*), o que está feito; o descritor textual do worker é polimento fora de escopo.
+- Learnings:
+  - Nenhuma ambiguidade — ACs explícitos, seguiu-se o padrão das stories anteriores (US-001/003/004/005/006/008) e o CLAUDE.md do projeto.
+---

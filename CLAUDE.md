@@ -11,6 +11,18 @@ context into the caller. The design goal of every tool is **context economy**: `
 `src/index.ts` logs the char count returned to context, because that char count is the real cost
 being optimized.
 
+## ⚠️ Refactor em curso (PRD mcp-bridge-v2)
+
+Há um PRD aprovado em `.ralph/mcp-bridge-v2/prd-update-1.html` (8 user stories) que muda **de
+propósito** vários invariantes descritos abaixo: rebrand para `polyagent-mcp` (US-001), env vars
+`CURSOR_BRIDGE_*` → `POLYAGENT_*` em corte limpo sem alias e `CURSOR_BIN` → `POLYAGENT_CURSOR_BIN`
+(US-002), remoção das tools `plan`/`build` (US-003), engine/modelo por tool auxiliar (US-004), erro
+de processo carregando `{stdout, stderr, exitCode}` separados (US-005), classificação de cota
+esgotada sem retry automático (US-006), hook renomeado (US-007) e bwrap obrigatório (US-008).
+**Se uma tarefa contradiz um invariante marcado abaixo, a tarefa está certa e o CLAUDE.md é que
+está desatualizado** — o texto marcado descreve o estado atual, correto até a implementação
+acontecer. Invariantes NÃO marcados seguem valendo integralmente.
+
 ## Commands
 
 ```bash
@@ -29,17 +41,17 @@ There is no linter configured. `npm run build` (tsc, `strict: true`) is the type
 Five small modules under `src/`, with pure logic covered by `test/*.test.ts`. The split exists so
 the **pure logic is testable without spawning a worker process**:
 
-- `index.ts` — MCP server + tool registrations (twelve tools: `delegate`, `fast_delegate`, `explore`,
-  `read_slice`, `run_filtered`, `web_lookup`, `plan`, `build`, `fan_out`, `generate_image`,
-  `follow_up`, `bridge_stats`).
+- `index.ts` — MCP server + tool registrations (ten tools: `delegate`, `fast_delegate`, `explore`,
+  `read_slice`, `run_filtered`, `web_lookup`, `fan_out`, `generate_image`, `follow_up`,
+  `bridge_stats`).
   Owns tool descriptions and the shared `routing` params (`cwd`/`model`/`effort`). The second arg
   to `new McpServer(...)` is an `instructions` string that states the routing boundary
   (read/locate/web/grunt-work → bridge tools; native Read only when about to edit). These load at
   **startup** and are visible to the host even while tool schemas are deferred — that is why they
   matter for adoption. The five core tools (`delegate`, `explore`, `read_slice`, `run_filtered`,
   `web_lookup`) register with `_meta: { "anthropic/alwaysLoad": true }` so Claude Code (≥2.1.121)
-  eagerly loads their schemas; secondary tools (`fast_delegate`, `plan`, `build`, `fan_out`,
-  `generate_image`, `follow_up`, `bridge_stats`) stay deferred. `format()` appends the `session_id`
+  eagerly loads their schemas; secondary tools (`fast_delegate`, `fan_out`, `generate_image`,
+  `follow_up`, `bridge_stats`) stay deferred. `format()` appends the `session_id`
   footer and logs usage;
   `follow_up` feeds that id back as `RunOpts.resume` so a prior worker session continues without
   resending its context — the footer and `follow_up` are two ends of the same loop.
@@ -49,9 +61,9 @@ the **pure logic is testable without spawning a worker process**:
 - `cli.ts` — the only module that touches the child process. `runCursor()` spawns the engine's CLI;
   `buildCursorArgs()`/`buildGrokArgs()`/`buildCodexArgs()`/`buildClaudeArgs()` (+ `buildArgs`
   dispatcher), `resolveModel()`, `parseCliJson()`/`parseCodexJsonl()` (+ `parseOutput` dispatcher),
-  `resolveTier()`, `resolveFastTier()`, `hasEngine()`, `binExists()`, `budgetNote()` are **pure** and
-  unit-tested. Keep the spawn boundary here — do not spawn from elsewhere.
-- `agents.ts` — resolves an optional `delegate`/`fast_delegate`/`build` persona on the host. A name such as
+  `resolveTier()`, `resolveFastTier()`, `resolveAuxTool()`, `hasEngine()`, `binExists()`, `budgetNote()`
+  are **pure** and unit-tested. Keep the spawn boundary here — do not spawn from elsewhere.
+- `agents.ts` — resolves an optional `delegate`/`fast_delegate` persona on the host. A name such as
   `pit:issue-investigator` searches project/home `.claude/agents` and `~/.claude/plugins`; plugin
   collisions pick the newest match by mtime. An inline `{prompt}` skips lookup. Only the markdown
   body crosses into the worker, and names containing `/` or `..` are rejected.
@@ -60,13 +72,14 @@ the **pure logic is testable without spawning a worker process**:
 
 The bridge drives four coding-agent CLIs, each with its own dialect and output format —
 `RunOpts.engine` (`"cursor"|"grok"|"codex"|"claude"`) selects one. Cursor is outside the default
-tier path; it is available as a fallback only when `CURSOR_BRIDGE_ENABLE_CURSOR=1`
+tier path; it is available as a fallback only when `POLYAGENT_ENABLE_CURSOR=1`
 (`CURSOR_ENABLED`).
 
-- **cursor** (`cursor-agent`) — opt-in fallback only. `CURSOR_BIN` defaults to `cursor-agent`, NOT
-  `agent` (in the user's PATH `agent` may be the grok binary). Dialect: `-p <prompt>` positional,
-  `--trust`, effort encoded in model ids, `--force`. Output `{result, session_id}`. Its default model
-  id is `composer-2.5-fast`; the old `composer-2.5[fast=true]` bracket is invalid now.
+- **cursor** (`cursor-agent`) — opt-in fallback only. `POLYAGENT_CURSOR_BIN` defaults to
+  `cursor-agent`, NOT `agent` (in the user's PATH `agent` may be the grok binary). Dialect:
+  `-p <prompt>` positional, `--trust`, effort encoded in model ids, `--force`. Output
+  `{result, session_id}`. Its default model id is `composer-2.5-fast`; the old
+  `composer-2.5[fast=true]` bracket is invalid now.
 - **grok** (`grok`) — dialect: prompt is the VALUE of `--single`, `--effort` is a separate
   flag, autonomy is `--always-approve` (not `--force`). Output `{text, sessionId}`.
 - **codex** (`codex exec`) — dialect: `exec` subcommand, JSONL output (`--json`, parsed by
@@ -96,9 +109,9 @@ healthy candidate in the measured speed order Codex Luna low → Claude Haiku �
 opt-in Cursor `DEFAULT_MODEL` as the final fallback. It keeps the same full read/edit/shell access,
 persona resolution, timeout budget note, and explicit `model`/`effort` overrides as `delegate`.
 - `prompts.ts` — pure prompt builders (`readSlicePrompt`, `runFilteredPrompt`, `explorePrompt`,
-  `webLookupPrompt`, `planPrompt`, `buildPrompt`). The tools' behavior lives in these prompt strings,
+  `webLookupPrompt`, `generateImagePrompt`, `fanOutArbiterPrompt`). The tools' behavior lives in these prompt strings,
   so changing a tool's contract usually means editing a prompt here (and its test), not `cli.ts`.
-- `usage.ts` — JSONL usage log behind `CURSOR_BRIDGE_LOG`; drives the `bridge_stats` tool.
+- `usage.ts` — JSONL usage log behind `POLYAGENT_LOG`; drives the `bridge_stats` tool.
 
 ### The sandbox (default-on, mandatory for ALL engines, in `cli.ts`)
 
@@ -143,36 +156,70 @@ points, all in `cli.ts`:
   `[note: codex unavailable ...]` suffix to the result. This is host-agnostic by design — it isn't an
   orca-specific patch, since any host that mismanages `CODEX_HOME` hits the same failure. Non-env
   codex errors (auth, rate limit, bad prompt) are NOT retried — they propagate as-is.
+  Cota esgotada e rate limit continuam **sem retry automático** — só a falha de ambiente cai no
+  `FALLBACK_ENGINE_ORDER`. Mas não propagam mais crus: `classifyQuotaError({stdout, stderr,
+  exitCode}, engine)` lê primeiro os campos JSON estruturados de **stdout** (é lá que o sinal vive) e
+  só depois aplica regex sobre as mensagens extraídas, devolvendo `quota_exhausted` | `rate_limited`
+  | `null`. `runCursor` converte o acerto em `QuotaError` com mensagem acionável — `quotaCandidates`
+  monta a lista de engines instaladas, habilitadas (`CURSOR_ENABLED`) e capazes do que a tool exige
+  (intersecção com `AUX_TOOL_REQUIREMENTS`/`ENGINE_CAPABILITIES`), e `quotaErrorMessage` escolhe a
+  forma da sugestão pela superfície da tool: `engine:"<x>"` nas quatro auxiliares, `level:<n>` (menor
+  nível cuja engine primária sobrou) no `delegate`, nenhuma em `fast_delegate`/`fan_out`, a lista
+  restrita a codex/grok em `generate_image` (as duas com tool de imagem própria), e "presa à sessão"
+  em `follow_up`. É por isso que `RunOpts.tool` existe: ela não
+  muda a execução, só a forma do erro. `rate_limited` pede espera e **nunca** sugere troca de engine.
+  Um padrão que não casa devolve `null` e a falha propaga crua — classificar errado é pior que não
+  classificar: o `ralph.sh` tratou `OAuth session expired` como cota e mascarou um bug do bridge que
+  queimava a credencial do usuário (ADENDO 3 do spike). Fonte dos padrões, com origem e confiança
+  declaradas por engine: `.ralph/mcp-bridge-v2/spikes/quota-patterns.md`. Só o grok (402 +
+  `Grok Build usage balance exhausted`, com `http_status` aninhado como TEXTO dentro de `errors[0]` —
+  por isso o parser desaninha) e a string de cota do codex foram observados em runtime; os padrões do
+  claude vêm do fonte/doc e seguem sendo hipótese.
 - **`buildSandboxArgs(spec)` is pure and unit-tested** (like `buildCursorArgs`). Bind order is
   load-bearing: `isoHome` mounts the empty `$HOME` **before** the HOME-subpath overlays (auth/
   toolchain), and the `workspace` bind is **last** so it's never shadowed. `buildSandboxSpec(workspace,
   engine)` is the impure half (mkdtemp + `existsSync` probing) — keep the fs/tmp side effects there.
 - **Only `cwd` is mounted — paths outside it are invisible.** A command touching a sibling path
   (additional working dir, adjacent monorepo) fails with `No such file or directory`. Mount extras
-  RW via `CURSOR_BRIDGE_SANDBOX_EXTRA` (`:`-separated absolute paths); `buildSandboxSpec` keeps only
+  RW via `POLYAGENT_SANDBOX_EXTRA` (`:`-separated absolute paths); `buildSandboxSpec` keeps only
   the ones that exist and aren't the workspace, and `buildSandboxArgs` binds them **after** the HOME
   overlays but **before** the workspace, so the workspace stays the last (never-shadowed) bind.
-- **Default-on with graceful fallback.** `SANDBOX_ON` is true unless `CURSOR_BRIDGE_SANDBOX` is
-  `off`/`0`/`false`/`no`/empty. If `bwrap` isn't on PATH, it logs to stderr and runs unsandboxed
-  (never fails the call). The two ephemeral tmp dirs (iso-home, /tmp) are `cleanup()`-ed on
-  close/error/timeout.
+- **Mandatory, with no graceful fallback.** `SANDBOX_ON` is true unless `POLYAGENT_SANDBOX` is
+  `off`/`0`/`false`/`no`/empty. With the sandbox on and `bwrap` missing from PATH, `sandboxPreflight()`
+  (called in `index.ts` right before `server.connect`) throws naming the remedy (installing
+  bubblewrap), so the server never boots degraded; `runOnce` rejects with the same `BWRAP_MISSING`
+  message if the binary disappears after the preflight. There is no stderr-warning path any more — a
+  warning the MCP caller never saw was how a security guarantee got dropped silently.
+  `POLYAGENT_SANDBOX=off` still disables it as an explicit operator choice, and in that case
+  `assertReadOnlyEngine(tool, engine)` refuses any non-codex engine on `explore`/`read_slice`/
+  `web_lookup` (only codex has its own `-s read-only`). The two ephemeral tmp dirs (iso-home, /tmp)
+  are `cleanup()`-ed on close/error/timeout.
 - The spawn boundary stays in `cli.ts` — the sandbox composes `bwrap <args> <engineBin> <engineArgs>`
   in the single `spawn()`; don't spawn `bwrap` from elsewhere.
 
 ### Key invariants (violating these breaks tools or tests)
 
-- **Read-only modes are load-bearing for safety.** `explore`, `read_slice`, and `web_lookup` run on
-  codex with `RunOpts.mode`, which `buildCodexArgs` converts to `-s read-only -c
-  approval_policy="never"`. `plan` also passes a mode: its default level 3 gets hard Codex
-  read-only; level 5 Claude is read-only by prompt only, and force OR mode must still add
-  `--dangerously-skip-permissions` so Claude headless does not hang. `run_filtered`, `delegate`, and
-  `build` omit mode and get full/bypass access because they execute commands or edit. Do not
-  silently remove a read-only tool's mode.
+- **Read-only modes are load-bearing for safety.** As três auxiliares não são mais fixas no codex
+  (engine por env/parâmetro), e por isso a garantia de read-only fora do codex vem do **sandbox
+  bwrap, obrigatório** (US-008): no nível do engine `buildGrokArgs` ignora `mode` e emite sempre
+  `--always-approve`, e no claude `mode` emite `--dangerously-skip-permissions` — o oposto de
+  read-only. Isso está declarado em código na matriz `ENGINE_CAPABILITIES` (`cli.ts`), campo
+  `modeAtEngineLevel`. `assertReadOnlyEngine` recusa, nomeando o motivo, um engine não-codex com o
+  sandbox desligado, e `resolveAuxTool` se apoia nesse guard.
+  `explore`, `read_slice`, and `web_lookup` pass
+  `RunOpts.mode`, which `buildCodexArgs` converts to `-s read-only -c
+  approval_policy="never"`; `follow_up` takes the same mode to keep a resumed read-only session
+  read-only. `run_filtered` and `delegate` omit mode and get full/bypass access because they execute
+  commands or edit. Do not silently remove a read-only tool's mode.
 - **The Cursor fallback default is `composer-2.5-fast`, never the old bracket or `auto`.**
-  `DEFAULT_MODEL` (env `CURSOR_BRIDGE_MODEL`) applies to the opt-in Cursor path. The current
+  `DEFAULT_MODEL` (env `POLYAGENT_MODEL`) applies to the opt-in Cursor path. The current
   cursor-agent rejects `composer-2.5[fast=true]`. `resolveModel` still accepts caller-supplied
   `auto`, but it is not the default.
-- **Health latency uses the real runtime timeout.** `computeEngineHealth(records, now, windowMs,
+- **Health latency uses the real runtime timeout.** `computeEngineHealth` ignora
+  **explicitamente** o outcome `"quota"` (registrado por `classifyOutcome` a partir do `name` da
+  `QuotaError`, sem importar `cli.ts`): sem esse `continue`, cota cairia no ramo "não é failure nem
+  timeout" e pontuaria 1, inflando o health justamente do engine que não pode mais ser usado.
+  `computeEngineHealth(records, now, windowMs,
   latencyCeilMs)` retains 300,000ms as its optional-parameter default for backward compatibility,
   but `currentEngineHealth()` passes `DEFAULT_TIMEOUT_MS` (30min by default). The old fixed 5min
   ceiling zeroed successful 5–22min runs and falsely made engines unhealthy despite no failure or
@@ -181,19 +228,29 @@ points, all in `cli.ts`:
   Claude Haiku, Grok 4.5 low; `resolveFastTier` skips missing or unhealthy native engines before the
   opt-in Cursor fallback. Keep it level-free, with the neutral usage receipt
   `{ requestedLevel: 0, matchedRequest: true }`, and do not mark it `alwaysLoad`.
-- **`explore`/`read_slice`/`run_filtered`/`web_lookup` run on codex at
-  `EXPLORE_MODEL=gpt-5.6-luna`.** An explicit `model` still wins. `explore` and `read_slice` pass a
+- **`explore`/`read_slice`/`run_filtered`/`web_lookup` resolvem engine e modelo por tool, com
+  default codex + `EXPLORE_MODEL=gpt-5.6-luna`.** Não há mais `engine: "codex"` hardcoded no
+  handler: cada uma lê `POLYAGENT_<TOOL>_ENGINE`/`_MODEL` e aceita um parâmetro `engine` opcional no
+  **próprio inputSchema** — nunca no objeto `routing` compartilhado, que é spread em 10 registrações
+  e daria `engine` também a `delegate`/`fan_out`/`follow_up`. A resolução é a função pura
+  `resolveAuxTool(tool, params, env, sandboxOn)` em `cli.ts`; precedência: parâmetro da chamada >
+  env da tool > default. Ela recusa, nomeando o motivo, um engine que não atenda o requisito
+  declarado em `AUX_TOOL_REQUIREMENTS` — read-only para as três de leitura, web search (só codex)
+  para `web_lookup` — e nunca degrada para acesso total em silêncio; `run_filtered` aceita qualquer
+  engine porque roda com `force: true` por desenho. Com engine não-codex e nenhum modelo definido, o
+  modelo fica `undefined` de propósito: `gpt-5.6-luna` é id de codex e quebraria em grok/claude.
+  An explicit `model` still wins. `explore` and `read_slice` pass a
   mode for `-s read-only`; `web_lookup` also sets `RunOpts.web`, which adds
   `-c tools.web_search=true` for real web search; `run_filtered` deliberately omits mode and uses
   bypass so it can run the requested command. `explore` takes `breadth` (`medium`|`thorough`) and
   LOCATES, never reviews.
-- **`plan` and `build` are a two-phase boundary.** `plan(task, level=3)` uses a strong planner and
-  returns an implementation plan without editing; default Codex Sol xhigh is hard read-only, while
-  level 5 Opus max relies on the prompt for read-only behavior. `build(plan, level=1, agent?)` implements
-  the approved plan with full access, defaulting to the cheap Luna max executor. Keep `planPrompt` and
-  `buildPrompt` aligned with that contract.
-- **Agent personas are additive and cross-engine.** `delegate` and `build` accept a named or inline
-  agent. Resolve it on the host in `agents.ts`, then pass its body via `RunOpts.agentPrompt`: Claude
+- **`plan` and `build` no longer exist as tools.** They were removed together with `planPrompt`/
+  `buildPrompt` in `prompts.ts` and their tests; the server registers ten tools. What survives is the
+  homonym: `RunOpts.mode: "plan" | "ask"` in `cli.ts` and `ExploreMode` in `prompts.ts` are the codex
+  read-only mode (`-s read-only`), used by `explore`/`read_slice`/`web_lookup` and `follow_up` — do
+  not delete them chasing the removed tool. `test/tools.test.ts` pins the ten-tool surface.
+- **Agent personas are additive and cross-engine.** `delegate` and `fast_delegate` accept a named or
+  inline agent. Resolve it on the host in `agents.ts`, then pass its body via `RunOpts.agentPrompt`: Claude
   `--append-system-prompt`, Grok `--rules`, Codex `-c developer_instructions=` encoded by
   `tomlString`, Cursor prompt prefix. Do not mount agent directories into the sandbox.
 - **`read_slice` must return source lines, not just `file:line` prefixes** — this is an explicit
@@ -204,7 +261,7 @@ points, all in `cli.ts`:
 - **`generate_image` is codex-only.** It is the sole tool with no cursor fallback: the built-in
   `image_gen`/`gpt-image-2` (keyless, via the ChatGPT/Codex subscription) exists only in codex, so the
   handler hard-fails when `hasEngine("codex")` is false. It forces `codex exec` at `IMAGE_MODEL` (env
-  `CURSOR_BRIDGE_IMAGE_MODEL`, default `gpt-5.6-sol`) with `effort:"low"` — the built-in tool does the
+  `POLYAGENT_IMAGE_MODEL`, default `gpt-5.6-sol`) with `effort:"low"` — the built-in tool does the
   pixels, the driver model just fires it. `RunOpts.images` (input files for editing) become `-i <file>`
   in `buildCodexArgs`, **followed by a `--` terminator**: `-i/--image` is variadic (`<FILE>...`), so
   without `--` the clap parser swallows the positional prompt as another image file and codex falls back
@@ -214,27 +271,35 @@ points, all in `cli.ts`:
 - **`parseCliJson` degrades gracefully**: non-JSON stdout falls back to raw text; `usage.ts`
   skips malformed JSONL lines. Match this best-effort posture — logging/parsing must never throw
   up into a tool call.
+  O erro de saída não-zero de `runOnce` é uma `ProcessError` (exportada de `cli.ts`) que carrega
+  `{stdout, stderr, exitCode}` separados — o JSON estruturado dos CLIs sai em **stdout** e se perdia
+  sempre que `stderr` tinha qualquer conteúdo. `error.message` segue idêntica
+  (`<engine> agent exited <code>: <stderr||stdout>`) e o fallback de engine continua decidindo pelo
+  `isCodexEnvError` sobre a message/stderr. Não colapse os canais de volta: a classificação de causa
+  (cota, rate limit, auth) depende do stdout preservado.
 - **Core tools are `alwaysLoad`.** The five core tools (`delegate`, `explore`, `read_slice`,
   `run_filtered`, `web_lookup`) register with `_meta: { "anthropic/alwaysLoad": true }` so Claude
   Code (≥2.1.121) eagerly loads their schemas instead of deferring them. Deferred tools lose to
   always-loaded native Read/Grep — that was the root adoption bug. Secondary tools
-  (`fast_delegate`, `generate_image`, `plan`, `build`, `fan_out`, `follow_up`, `bridge_stats`) stay
-  deferred. Do not strip
+  (`fast_delegate`, `generate_image`, `fan_out`, `follow_up`, `bridge_stats`) stay deferred. Do not
+  strip
   `alwaysLoad` from the core five or add it to the secondary set without intent.
 - **Timeout is a safety net, not a work budget.** `DEFAULT_TIMEOUT_MS` is 30 min (`1_800_000`),
-  overridable via `CURSOR_BRIDGE_TIMEOUT_MS`. Pure helper `budgetNote(timeoutMs)` appends a
-  `[Time budget: ~N min ... return partial results ...]` note to the prompt of the three
-  **execution** tools (`delegate`, `fast_delegate`, `plan`, `build`) so the worker self-manages instead of being
+  overridable via `POLYAGENT_TIMEOUT_MS`. Pure helper `budgetNote(timeoutMs)` appends a
+  `[Time budget: ~N min ... return partial results ...]` note to the prompt of the two
+  **execution** tools (`delegate`, `fast_delegate`) so the worker self-manages instead of being
   killed blind. Read tools (`explore`, `read_slice`, `run_filtered`, `web_lookup`) do not get it.
   Keep that split.
 
-## The hook (`hooks/prefer-cursor-bridge.mjs`)
+## The hook (`hooks/prefer-polyagent.mjs`)
 
 Ships separately from the server: a hook the host wires (in its `settings.json`) as a `PreToolUse`
 matcher for `Read|Grep|Glob|WebSearch|WebFetch|Bash|Edit|Write` (main-loop nudges), plus a
 `SessionStart` entry and a `SubagentStart` entry — each pointing at
-`hooks/prefer-cursor-bridge.mjs`. It steers the agent toward the bridge. Env
-`CURSOR_BRIDGE_HOOK_MODE` = `off` | `nudge` | `redirect` (default **`redirect`**): `off` does
+`hooks/prefer-polyagent.mjs`. It steers the agent toward the `polyagent` alias and no longer
+references the removed `plan`/`build` tools. Renaming from the old path is a breaking change for
+host `settings.json` entries that still point at it. Env
+`POLYAGENT_HOOK_MODE` = `off` | `nudge` | `redirect` (default **`redirect`**): `off` does
 nothing; `nudge` is the old non-blocking `additionalContext` behavior; `redirect` returns
 `permissionDecision: "deny"` (via `denyRedirect()`) for the two safe-to-block cases. On `Bash` it
 only fires for artifact-writing commands (`git commit`/`push`, `git worktree add`, `gh pr create`,
@@ -245,7 +310,7 @@ trims it). Design constraints, all tested in `test/hook.test.ts`:
   `decide()` returns `{ keys, text, redirect }`. The I/O wrapper (`main`) only runs when invoked as
   a script.
 - **Redirect mode (default):** for WebSearch/WebFetch → `web_lookup` and whole-file large Read
-  (no offset/limit, ≥ `CURSOR_BRIDGE_HOOK_MIN_LINES`) → `read_slice`, the hook **denies** the native
+  (no offset/limit, ≥ `POLYAGENT_HOOK_MIN_LINES`) → `read_slice`, the hook **denies** the native
   call once and names the bridge tool in the reason. It is **one-shot + fail-open**: per-session
   dedup keys are saved **before** emitting, so the second identical call is allowed through; the
   deny reason (`FAILOPEN_SUFFIX`) explicitly tells the model it may retry — critical under headless
@@ -261,7 +326,7 @@ trims it). Design constraints, all tested in `test/hook.test.ts`:
   pre-marks `preload` in the dedup file so the PreToolUse piggyback never repeats it.
 - Fail-open on errors: any error → print nothing, exit 0. SubagentStart and SessionStart paths are
   unchanged by redirect mode.
-- Threshold for the large-Read redirect/nudge is `CURSOR_BRIDGE_HOOK_MIN_LINES` (default 300).
+- Threshold for the large-Read redirect/nudge is `POLYAGENT_HOOK_MIN_LINES` (default 300).
 
 **`SubagentStart` reaches spawned subagents.** Main-loop PreToolUse nudges never reach subagents, so
 the hook wires a dedicated `SubagentStart` entry. When `hook_event_name === "SubagentStart"`,
