@@ -152,8 +152,11 @@ describe("quotaCandidates — lista de engines sugeríveis (US-006)", () => {
     expect(quotaCandidates("run_filtered", "codex", () => true, false, true)).toEqual(["grok", "claude"]);
   });
 
-  it("generate_image é codex-only: nunca sugere outra engine", () => {
-    expect(quotaCandidates("generate_image", "codex", () => true, true, true)).toEqual([]);
+  it("generate_image só considera as engines com tool de imagem própria (codex/grok)", () => {
+    expect(quotaCandidates("generate_image", "codex", () => true, true, true)).toEqual(["grok"]);
+    expect(quotaCandidates("generate_image", "grok", () => true, true, true)).toEqual(["codex"]);
+    const noGrok = (e: Engine) => e !== "grok";
+    expect(quotaCandidates("generate_image", "codex", noGrok, true, true)).toEqual([]);
   });
 });
 

@@ -77,7 +77,9 @@ describe("superfície: toda chamada a runCursor declara a tool", () => {
     const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
     const indexSrc = readFileSync(path.join(repoRoot, "src", "index.ts"), "utf8");
     const calls = indexSrc.match(/runCursor\(\{/g) ?? [];
-    const declared = indexSrc.match(/\btool: "/g) ?? [];
+    // Casa o BLOCO da chamada, não `tool: "` solto no arquivo: um literal desses em qualquer outro
+    // lugar mascararia uma chamada nova sem tool, e o erro de cota voltaria a sair sem sugestão.
+    const declared = indexSrc.match(/runCursor\(\{(?:[^{}]|\{[^{}]*\})*?\btool: "/gs) ?? [];
     expect(calls.length).toBeGreaterThan(0);
     expect(declared.length).toBe(calls.length);
   });

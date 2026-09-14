@@ -164,8 +164,9 @@ points, all in `cli.ts`:
   monta a lista de engines instaladas, habilitadas (`CURSOR_ENABLED`) e capazes do que a tool exige
   (intersecção com `AUX_TOOL_REQUIREMENTS`/`ENGINE_CAPABILITIES`), e `quotaErrorMessage` escolhe a
   forma da sugestão pela superfície da tool: `engine:"<x>"` nas quatro auxiliares, `level:<n>` (menor
-  nível cuja engine primária sobrou) no `delegate`, nenhuma em `fast_delegate`/`fan_out`/
-  `generate_image`, e "presa à sessão" em `follow_up`. É por isso que `RunOpts.tool` existe: ela não
+  nível cuja engine primária sobrou) no `delegate`, nenhuma em `fast_delegate`/`fan_out`, a lista
+  restrita a codex/grok em `generate_image` (as duas com tool de imagem própria), e "presa à sessão"
+  em `follow_up`. É por isso que `RunOpts.tool` existe: ela não
   muda a execução, só a forma do erro. `rate_limited` pede espera e **nunca** sugere troca de engine.
   Um padrão que não casa devolve `null` e a falha propaga crua — classificar errado é pior que não
   classificar: o `ralph.sh` tratou `OAuth session expired` como cota e mascarou um bug do bridge que

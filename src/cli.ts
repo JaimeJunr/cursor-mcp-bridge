@@ -628,14 +628,14 @@ export function quotaCandidates(
   cursorEnabled: boolean = CURSOR_ENABLED,
   sandboxOn: boolean = SANDBOX_ON,
 ): Engine[] {
-  // generate_image é codex-only: o image_gen embutido só existe lá, então não há alternativa.
-  if (tool === "generate_image") return [];
   const req = tool === undefined
     ? undefined
     : (AUX_TOOL_REQUIREMENTS as Partial<Record<BridgeTool, { readOnly: boolean; webSearch: boolean }>>)[tool];
   return ENGINES.filter((engine) => {
     if (engine === exhausted || !has(engine)) return false;
     if (engine === "cursor" && !cursorEnabled) return false;
+    // generate_image roda só nas engines com tool de imagem keyless própria (image_gen/grok-build).
+    if (tool === "generate_image") return IMAGE_ENGINES.includes(engine);
     if (!req) return true;
     const cap = ENGINE_CAPABILITIES[engine];
     if (req.webSearch && !cap.webSearch) return false;
@@ -643,6 +643,9 @@ export function quotaCandidates(
     return true;
   });
 }
+
+/** Engines com tool de imagem própria — as únicas que generate_image sabe usar. */
+const IMAGE_ENGINES: Engine[] = ["codex", "grok"];
 
 /** Menor nível do delegate (1-5) cuja engine primária está entre as candidatas. */
 function lowestLevelFor(candidates: Engine[]): number | undefined {
@@ -682,9 +685,11 @@ export function quotaErrorMessage(
     return `${head} — follow_up is pinned to the engine of the resumed session; ` +
       "start a new call on another engine instead of retrying here.";
   }
-  if (tool === "fast_delegate" || tool === "fan_out" || tool === "generate_image") {
+  if (tool === "fast_delegate" || tool === "fan_out") {
     return `${head} — this tool picks the engine itself and exposes no engine parameter.`;
   }
+  // generate_image tem parâmetro engine, mas só entre codex e grok — a lista já está restrita a essas.
+  if (tool === "generate_image") return `${head} — generate_image runs on codex or grok only.`;
   // Sem tool declarada não há superfície conhecida para sugerir — nomeia as engines e para por aí.
   return tool === undefined ? head : `${head} — retry with engine:"${candidates[0]}"`;
 }
