@@ -133,10 +133,10 @@ const SANDBOX_ENGINE_RO: Record<Engine, string[]> = {
   cursor: [], // auth do cursor já vem no SANDBOX_HOME_RO base
   grok: [], // grok precisa de RW em ~/.grok (auth, skills e cache) — ver SANDBOX_ENGINE_RW
   codex: [], // codex precisa de RW em ~/.codex (state/cache/locks/socket) — ver SANDBOX_ENGINE_RW
-  // claude: SÓ a credencial de auth (oauth da assinatura). NUNCA ~/.claude inteiro — isso traz
-  // settings/agents/mcp.json de volta, o que reinfla o contexto (o worker roda com --bare +
-  // --append-system-prompt, então não precisa descobrir agents/rules no HOME).
-  claude: [".claude/.credentials.json", ".claude.json"],
+  // claude: NUNCA ~/.claude inteiro — isso traz settings/agents/mcp.json de volta, o que reinfla o
+  // contexto (o worker roda com --bare + --append-system-prompt, então não precisa descobrir
+  // agents/rules no HOME). A credencial de oauth fica em SANDBOX_ENGINE_RW: precisa ser gravável.
+  claude: [".claude.json"],
 };
 /**
  * Subpaths do HOME RW por engine. Grok precisa de auth/skills/cache em ~/.grok; o codex tem
@@ -149,7 +149,17 @@ const SANDBOX_ENGINE_RW: Record<Engine, string[]> = {
   codex: [".codex"],
   // claude escreve estado de sessão/telemetria em ~/.claude ao rodar headless; sem RW o run pode
   // falhar. Damos RW só em subpaths de estado, nunca settings/agents (que ficam no HOME isolado).
-  claude: [".claude/statsig", ".claude/projects", ".claude/todos", ".claude/shell-snapshots"],
+  // .credentials.json é RW de propósito: o CLI renova o oauth da assinatura e precisa persistir o
+  // par novo. Montado RO, o refresh falha com EROFS e o refresh token — já rotacionado no servidor
+  // — fica queimado no disco, derrubando TODA a auth do host com "401 OAuth token has been
+  // revoked", não só o worker. Quem escreve ali é o próprio CLI renovando a credencial dele.
+  claude: [
+    ".claude/.credentials.json",
+    ".claude/statsig",
+    ".claude/projects",
+    ".claude/todos",
+    ".claude/shell-snapshots",
+  ],
 };
 /** Subpaths do HOME liberados RW: caches de build (acelera runs seguidos). */
 const SANDBOX_HOME_RW = [".gradle", ".m2", ".cache/uv", ".cache/pip"];
