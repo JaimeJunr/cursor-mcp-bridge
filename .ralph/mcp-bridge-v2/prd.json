@@ -141,8 +141,8 @@
       ],
       "jiraKey": null,
       "repo": null,
-      "passes": false,
-      "notes": "Fonte: prd-update-1.html (tier update, herda full). Spike: spikes/quota-patterns.md (ver ADENDO)."
+      "passes": true,
+      "notes": "GATE1 253/253; GATE3 tsc limpo; GATE5 f986d41; GATE6 depth-loop PASS (TDR genuine, aderencia APROVA COM SUGESTOES 10/10 ACs 0 blockers). Carry-over p/ US-006: engine cursor aceito sem CURSOR_ENABLED (MEDIUM, nao coberto por AC)."
     },
     {
       "id": "US-006",
