@@ -116,7 +116,7 @@ Almost every other host takes the same stdio JSON. Find its MCP config file (usu
 ```
 
 To pass configuration (see [`README.md`](README.md) env table), add an `"env"` object, e.g.
-`"env": { "CURSOR_BRIDGE_FORCE": "1" }`.
+`"env": { "POLYAGENT_FORCE": "1" }`.
 
 ## 3. Allowlist the bridge tools (Claude Code)
 

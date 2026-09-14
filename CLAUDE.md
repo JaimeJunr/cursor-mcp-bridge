@@ -72,13 +72,14 @@ the **pure logic is testable without spawning a worker process**:
 
 The bridge drives four coding-agent CLIs, each with its own dialect and output format —
 `RunOpts.engine` (`"cursor"|"grok"|"codex"|"claude"`) selects one. Cursor is outside the default
-tier path; it is available as a fallback only when `CURSOR_BRIDGE_ENABLE_CURSOR=1`
+tier path; it is available as a fallback only when `POLYAGENT_ENABLE_CURSOR=1`
 (`CURSOR_ENABLED`).
 
-- **cursor** (`cursor-agent`) — opt-in fallback only. `CURSOR_BIN` defaults to `cursor-agent`, NOT
-  `agent` (in the user's PATH `agent` may be the grok binary). Dialect: `-p <prompt>` positional,
-  `--trust`, effort encoded in model ids, `--force`. Output `{result, session_id}`. Its default model
-  id is `composer-2.5-fast`; the old `composer-2.5[fast=true]` bracket is invalid now.
+- **cursor** (`cursor-agent`) — opt-in fallback only. `POLYAGENT_CURSOR_BIN` defaults to
+  `cursor-agent`, NOT `agent` (in the user's PATH `agent` may be the grok binary). Dialect:
+  `-p <prompt>` positional, `--trust`, effort encoded in model ids, `--force`. Output
+  `{result, session_id}`. Its default model id is `composer-2.5-fast`; the old
+  `composer-2.5[fast=true]` bracket is invalid now.
 - **grok** (`grok`) — dialect: prompt is the VALUE of `--single`, `--effort` is a separate
   flag, autonomy is `--always-approve` (not `--force`). Output `{text, sessionId}`.
 - **codex** (`codex exec`) — dialect: `exec` subcommand, JSONL output (`--json`, parsed by
@@ -110,7 +111,7 @@ persona resolution, timeout budget note, and explicit `model`/`effort` overrides
 - `prompts.ts` — pure prompt builders (`readSlicePrompt`, `runFilteredPrompt`, `explorePrompt`,
   `webLookupPrompt`, `generateImagePrompt`, `fanOutArbiterPrompt`). The tools' behavior lives in these prompt strings,
   so changing a tool's contract usually means editing a prompt here (and its test), not `cli.ts`.
-- `usage.ts` — JSONL usage log behind `CURSOR_BRIDGE_LOG`; drives the `bridge_stats` tool.
+- `usage.ts` — JSONL usage log behind `POLYAGENT_LOG`; drives the `bridge_stats` tool.
 
 ### The sandbox (default-on, mandatory for ALL engines, in `cli.ts`)
 
@@ -165,14 +166,14 @@ points, all in `cli.ts`:
   engine)` is the impure half (mkdtemp + `existsSync` probing) — keep the fs/tmp side effects there.
 - **Only `cwd` is mounted — paths outside it are invisible.** A command touching a sibling path
   (additional working dir, adjacent monorepo) fails with `No such file or directory`. Mount extras
-  RW via `CURSOR_BRIDGE_SANDBOX_EXTRA` (`:`-separated absolute paths); `buildSandboxSpec` keeps only
+  RW via `POLYAGENT_SANDBOX_EXTRA` (`:`-separated absolute paths); `buildSandboxSpec` keeps only
   the ones that exist and aren't the workspace, and `buildSandboxArgs` binds them **after** the HOME
   overlays but **before** the workspace, so the workspace stays the last (never-shadowed) bind.
 - 🔄 [US-008] **Default-on with graceful fallback.** O fallback gracioso é removido: sem `bwrap` no
   PATH o server passa a falhar na inicialização nomeando o remédio (`sudo apt install bubblewrap`)
   em vez de rodar degradado. `POLYAGENT_SANDBOX=off` segue desligando por escolha explícita do
   operador — e, nesse caso, as tools read-only só aceitam codex.
-  `SANDBOX_ON` is true unless `CURSOR_BRIDGE_SANDBOX` is
+  `SANDBOX_ON` is true unless `POLYAGENT_SANDBOX` is
   `off`/`0`/`false`/`no`/empty. If `bwrap` isn't on PATH, it logs to stderr and runs unsandboxed
   (never fails the call). The two ephemeral tmp dirs (iso-home, /tmp) are `cleanup()`-ed on
   close/error/timeout.
@@ -192,11 +193,8 @@ points, all in `cli.ts`:
   approval_policy="never"`; `follow_up` takes the same mode to keep a resumed read-only session
   read-only. `run_filtered` and `delegate` omit mode and get full/bypass access because they execute
   commands or edit. Do not silently remove a read-only tool's mode.
-- 🔄 [US-001, US-002] **The Cursor fallback default is `composer-2.5-fast`, never the old bracket
-  or `auto`.** O default em si não muda; o que muda é o nome: toda env var `CURSOR_BRIDGE_*` citada
-  neste arquivo vira `POLYAGENT_*` com o mesmo sufixo (aqui, `POLYAGENT_MODEL`) e `CURSOR_BIN` vira
-  `POLYAGENT_CURSOR_BIN`, em corte limpo — ler o nome antigo não tem efeito.
-  `DEFAULT_MODEL` (env `CURSOR_BRIDGE_MODEL`) applies to the opt-in Cursor path. The current
+- **The Cursor fallback default is `composer-2.5-fast`, never the old bracket or `auto`.**
+  `DEFAULT_MODEL` (env `POLYAGENT_MODEL`) applies to the opt-in Cursor path. The current
   cursor-agent rejects `composer-2.5[fast=true]`. `resolveModel` still accepts caller-supplied
   `auto`, but it is not the default.
 - 🔄 [US-006] **Health latency uses the real runtime timeout.** `computeEngineHealth` passa a
@@ -239,7 +237,7 @@ points, all in `cli.ts`:
 - **`generate_image` is codex-only.** It is the sole tool with no cursor fallback: the built-in
   `image_gen`/`gpt-image-2` (keyless, via the ChatGPT/Codex subscription) exists only in codex, so the
   handler hard-fails when `hasEngine("codex")` is false. It forces `codex exec` at `IMAGE_MODEL` (env
-  `CURSOR_BRIDGE_IMAGE_MODEL`, default `gpt-5.6-sol`) with `effort:"low"` — the built-in tool does the
+  `POLYAGENT_IMAGE_MODEL`, default `gpt-5.6-sol`) with `effort:"low"` — the built-in tool does the
   pixels, the driver model just fires it. `RunOpts.images` (input files for editing) become `-i <file>`
   in `buildCodexArgs`, **followed by a `--` terminator**: `-i/--image` is variadic (`<FILE>...`), so
   without `--` the clap parser swallows the positional prompt as another image file and codex falls back
@@ -261,7 +259,7 @@ points, all in `cli.ts`:
   strip
   `alwaysLoad` from the core five or add it to the secondary set without intent.
 - **Timeout is a safety net, not a work budget.** `DEFAULT_TIMEOUT_MS` is 30 min (`1_800_000`),
-  overridable via `CURSOR_BRIDGE_TIMEOUT_MS`. Pure helper `budgetNote(timeoutMs)` appends a
+  overridable via `POLYAGENT_TIMEOUT_MS`. Pure helper `budgetNote(timeoutMs)` appends a
   `[Time budget: ~N min ... return partial results ...]` note to the prompt of the two
   **execution** tools (`delegate`, `fast_delegate`) so the worker self-manages instead of being
   killed blind. Read tools (`explore`, `read_slice`, `run_filtered`, `web_lookup`) do not get it.
@@ -278,7 +276,7 @@ Ships separately from the server: a hook the host wires (in its `settings.json`)
 matcher for `Read|Grep|Glob|WebSearch|WebFetch|Bash|Edit|Write` (main-loop nudges), plus a
 `SessionStart` entry and a `SubagentStart` entry — each pointing at
 `hooks/prefer-cursor-bridge.mjs`. It steers the agent toward the bridge. Env
-`CURSOR_BRIDGE_HOOK_MODE` = `off` | `nudge` | `redirect` (default **`redirect`**): `off` does
+`POLYAGENT_HOOK_MODE` = `off` | `nudge` | `redirect` (default **`redirect`**): `off` does
 nothing; `nudge` is the old non-blocking `additionalContext` behavior; `redirect` returns
 `permissionDecision: "deny"` (via `denyRedirect()`) for the two safe-to-block cases. On `Bash` it
 only fires for artifact-writing commands (`git commit`/`push`, `git worktree add`, `gh pr create`,
@@ -289,7 +287,7 @@ trims it). Design constraints, all tested in `test/hook.test.ts`:
   `decide()` returns `{ keys, text, redirect }`. The I/O wrapper (`main`) only runs when invoked as
   a script.
 - **Redirect mode (default):** for WebSearch/WebFetch → `web_lookup` and whole-file large Read
-  (no offset/limit, ≥ `CURSOR_BRIDGE_HOOK_MIN_LINES`) → `read_slice`, the hook **denies** the native
+  (no offset/limit, ≥ `POLYAGENT_HOOK_MIN_LINES`) → `read_slice`, the hook **denies** the native
   call once and names the bridge tool in the reason. It is **one-shot + fail-open**: per-session
   dedup keys are saved **before** emitting, so the second identical call is allowed through; the
   deny reason (`FAILOPEN_SUFFIX`) explicitly tells the model it may retry — critical under headless
@@ -305,7 +303,7 @@ trims it). Design constraints, all tested in `test/hook.test.ts`:
   pre-marks `preload` in the dedup file so the PreToolUse piggyback never repeats it.
 - Fail-open on errors: any error → print nothing, exit 0. SubagentStart and SessionStart paths are
   unchanged by redirect mode.
-- Threshold for the large-Read redirect/nudge is `CURSOR_BRIDGE_HOOK_MIN_LINES` (default 300).
+- Threshold for the large-Read redirect/nudge is `POLYAGENT_HOOK_MIN_LINES` (default 300).
 
 **`SubagentStart` reaches spawned subagents.** Main-loop PreToolUse nudges never reach subagents, so
 the hook wires a dedicated `SubagentStart` entry. When `hook_event_name === "SubagentStart"`,

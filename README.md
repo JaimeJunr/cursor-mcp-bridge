@@ -23,7 +23,7 @@ The server exposes ten tools:
 | `generate_image` | Generate or edit an image through Codex's built-in image tool and save it inside `cwd`. |
 | `fan_out` | Run the SAME prompt across N engines/tiers in parallel isolated sandboxes and get back ONLY a compact digest — `mode: "race"` (default) returns the first success, `mode: "consensus"` compares every output through one cheap arbiter. |
 | `follow_up` | Continue a prior session by `session_id`. |
-| `bridge_stats` | Report calls and chars returned to context per tool (needs `CURSOR_BRIDGE_LOG`). |
+| `bridge_stats` | Report calls and chars returned to context per tool (needs `POLYAGENT_LOG`). |
 
 Worker tools accept `cwd`, `model`, and `effort` where applicable. `delegate` requires a **level**
 (1-5); `fast_delegate` has none and picks the fastest healthy engine. Explicit `model`/`effort`
@@ -34,7 +34,7 @@ values override the selected tier.
 - Node ≥ 18
 - Codex installed and authenticated for read tools and levels 1/3; Grok for levels 2/4; Claude Code
   for level 5.
-- Optional Cursor fallback: install `cursor-agent` and set `CURSOR_BRIDGE_ENABLE_CURSOR=1`.
+- Optional Cursor fallback: install `cursor-agent` and set `POLYAGENT_ENABLE_CURSOR=1`.
 
 ## Install
 
@@ -81,20 +81,50 @@ have their own approval settings — consult the host.
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `CURSOR_BIN` | `cursor-agent` | Path to the optional Cursor CLI fallback. |
-| `CURSOR_BRIDGE_GROK_BIN` | `grok` | Path to the Grok CLI. |
-| `CURSOR_BRIDGE_CODEX_BIN` | `codex` | Path to the Codex CLI. |
-| `CURSOR_BRIDGE_CLAUDE_BIN` | `claude` | Path to the Claude Code CLI. |
-| `CURSOR_BRIDGE_ENABLE_CURSOR` | _(off)_ | Set to `1`/`true` to allow Cursor fallback when a tier's preferred CLI is missing. Otherwise the call fails with the missing CLI named. |
-| `CURSOR_BRIDGE_MODEL` | `composer-2.5-fast` | Default model for the optional Cursor path. |
-| `CURSOR_BRIDGE_EXPLORE_MODEL` | `gpt-5.6-luna` | Codex model for `explore`, `read_slice`, `run_filtered`, and `web_lookup` when the call omits `model`. |
-| `CURSOR_BRIDGE_AGENT_PATHS` | _(off)_ | Additional `:`-separated roots for named agent personas, searched before project/home `.claude/agents` and `~/.claude/plugins`. |
-| `CURSOR_BRIDGE_SANDBOX` | `bwrap` | Isolates every engine in a bubblewrap sandbox with an empty `$HOME`, preventing global config, MCP servers, hooks, and skills from loading. Only auth, required engine state, and toolchains are bound in. Set `off`/`0` to disable; falls back to unsandboxed if `bwrap` is missing. |
-| `CURSOR_BRIDGE_FORCE` | _(off)_ | If `1`/`true`, force-enable non-interactive approval for Cursor and Claude runs. |
-| `CURSOR_BRIDGE_TIMEOUT_MS` | `1800000` (30 min) | Per-call safety-net timeout (not a work budget). Execution tools (`delegate`/`fast_delegate`) also get a prompt note so the worker returns partial results before being killed. |
-| `CURSOR_BRIDGE_LOG` | _(off)_ | Path to a JSONL file; when set, every call logs `{tool, outChars}` for `bridge_stats`. |
-| `CURSOR_BRIDGE_HOOK_MODE` | `redirect` | Hook behavior: `off` (no-op), `nudge` (non-blocking `additionalContext` only), or `redirect` (deny once + name bridge tool for WebSearch/WebFetch and whole-file large Read; fail-open on retry). Grep/Glob/Bash/Edit/Write stay nudge-only. |
-| `CURSOR_BRIDGE_HOOK_MIN_LINES` | `300` | Line threshold above which the optional hook (below) redirects/nudges whole-file Read toward `read_slice`. |
+| `POLYAGENT_CURSOR_BIN` | `cursor-agent` | Path to the optional Cursor CLI fallback. |
+| `POLYAGENT_GROK_BIN` | `grok` | Path to the Grok CLI. |
+| `POLYAGENT_CODEX_BIN` | `codex` | Path to the Codex CLI. |
+| `POLYAGENT_CLAUDE_BIN` | `claude` | Path to the Claude Code CLI. |
+| `POLYAGENT_ENABLE_CURSOR` | _(off)_ | Set to `1`/`true` to allow Cursor fallback when a tier's preferred CLI is missing. Otherwise the call fails with the missing CLI named. |
+| `POLYAGENT_MODEL` | `composer-2.5-fast` | Default model for the optional Cursor path. |
+| `POLYAGENT_EXPLORE_MODEL` | `gpt-5.6-luna` | Codex model for `explore`, `read_slice`, `run_filtered`, and `web_lookup` when the call omits `model`. |
+| `POLYAGENT_AGENT_PATHS` | _(off)_ | Additional `:`-separated roots for named agent personas, searched before project/home `.claude/agents` and `~/.claude/plugins`. |
+| `POLYAGENT_SANDBOX` | `bwrap` | Isolates every engine in a bubblewrap sandbox with an empty `$HOME`, preventing global config, MCP servers, hooks, and skills from loading. Only auth, required engine state, and toolchains are bound in. Set `off`/`0` to disable; falls back to unsandboxed if `bwrap` is missing. |
+| `POLYAGENT_FORCE` | _(off)_ | If `1`/`true`, force-enable non-interactive approval for Cursor and Claude runs. |
+| `POLYAGENT_TIMEOUT_MS` | `1800000` (30 min) | Per-call safety-net timeout (not a work budget). Execution tools (`delegate`/`fast_delegate`) also get a prompt note so the worker returns partial results before being killed. |
+| `POLYAGENT_LOG` | _(off)_ | Path to a JSONL file; when set, every call logs `{tool, outChars}` for `bridge_stats`. |
+| `POLYAGENT_HOOK_MODE` | `redirect` | Hook behavior: `off` (no-op), `nudge` (non-blocking `additionalContext` only), or `redirect` (deny once + name bridge tool for WebSearch/WebFetch and whole-file large Read; fail-open on retry). Grep/Glob/Bash/Edit/Write stay nudge-only. |
+| `POLYAGENT_HOOK_MIN_LINES` | `300` | Line threshold above which the optional hook (below) redirects/nudges whole-file Read toward `read_slice`. |
+
+### Breaking change: env var rename
+
+Every `CURSOR_BRIDGE_*` variable was renamed to `POLYAGENT_*` (same suffix), and `CURSOR_BIN`
+became `POLYAGENT_CURSOR_BIN`. This is a **clean cut**: the old names are no longer read at all —
+setting one has zero effect (no fallback, no warning). Update your host config (`mcp.json` /
+`settings.json` `"env"` blocks) and any shell profile before upgrading.
+
+| Old (removed) | New |
+|---------------|-----|
+| `CURSOR_BIN` | `POLYAGENT_CURSOR_BIN` |
+| `CURSOR_BRIDGE_AGENT_PATHS` | `POLYAGENT_AGENT_PATHS` |
+| `CURSOR_BRIDGE_GROK_BIN` | `POLYAGENT_GROK_BIN` |
+| `CURSOR_BRIDGE_CODEX_BIN` | `POLYAGENT_CODEX_BIN` |
+| `CURSOR_BRIDGE_CLAUDE_BIN` | `POLYAGENT_CLAUDE_BIN` |
+| `CURSOR_BRIDGE_MODEL` | `POLYAGENT_MODEL` |
+| `CURSOR_BRIDGE_EXPLORE_MODEL` | `POLYAGENT_EXPLORE_MODEL` |
+| `CURSOR_BRIDGE_IMAGE_MODEL` | `POLYAGENT_IMAGE_MODEL` |
+| `CURSOR_BRIDGE_FORCE` | `POLYAGENT_FORCE` |
+| `CURSOR_BRIDGE_ENABLE_CURSOR` | `POLYAGENT_ENABLE_CURSOR` |
+| `CURSOR_BRIDGE_TIMEOUT_MS` | `POLYAGENT_TIMEOUT_MS` |
+| `CURSOR_BRIDGE_DEBUG` | `POLYAGENT_DEBUG` |
+| `CURSOR_BRIDGE_SANDBOX` | `POLYAGENT_SANDBOX` |
+| `CURSOR_BRIDGE_SANDBOX_EXTRA` | `POLYAGENT_SANDBOX_EXTRA` |
+| `CURSOR_BRIDGE_LOG` | `POLYAGENT_LOG` |
+| `CURSOR_BRIDGE_HOOK_MODE` | `POLYAGENT_HOOK_MODE` |
+| `CURSOR_BRIDGE_HOOK_MIN_LINES` | `POLYAGENT_HOOK_MIN_LINES` |
+
+"cursor" survives only where it names the actual Cursor engine (`POLYAGENT_CURSOR_BIN`,
+`POLYAGENT_ENABLE_CURSOR`).
 
 > **Security:** `delegate`, `fast_delegate`, and `run_filtered` have full access and auto-approve
 > their work. `explore`, `read_slice`, and `web_lookup` use Codex's read-only sandbox. Named agents
@@ -116,7 +146,7 @@ the bridge at the moment it reaches for a native tool — text in a config file 
 pressure, a call-time reminder does not. This repo ships one at
 [`hooks/prefer-cursor-bridge.mjs`](hooks/prefer-cursor-bridge.mjs): it runs on `node`
 (already required) and only fires where it pays. Default mode is **`redirect`**
-(`CURSOR_BRIDGE_HOOK_MODE=redirect`): for the two safe-to-block cases it returns
+(`POLYAGENT_HOOK_MODE=redirect`): for the two safe-to-block cases it returns
 `permissionDecision: "deny"` once and names the bridge tool; other cases stay non-blocking
 nudges. Wire it into your host's settings (Claude Code `settings.json`):
 
@@ -140,7 +170,7 @@ file keyed by `session_id`), because a repeated fire is worse than none: the age
 to ignore it *and* every fire costs tokens. Dedup keys are saved **before** emitting so
 redirect is one-shot and fail-open (a second identical call is allowed through).
 
-> - **`Read`** whole-file (no offset/limit) over `CURSOR_BRIDGE_HOOK_MIN_LINES` lines →
+> - **`Read`** whole-file (no offset/limit) over `POLYAGENT_HOOK_MIN_LINES` lines →
 >   **redirect** (default) or nudge toward `read_slice` (once per file). Partial reads are left alone.
 > - **`WebSearch`/`WebFetch`** → **redirect** (default) or nudge toward `web_lookup` (once).
 > - **`Grep`/`Glob`** → emits the one-time **preload** reminder to run the `ToolSearch` for any
@@ -161,7 +191,7 @@ redirect is one-shot and fail-open (a second identical call is allowed through).
 >   ToolSearch first; if the native tool is genuinely needed, call it again and it will be allowed
 >   (critical under headless `-p` so the agent never hard-stalls).
 
-Set `CURSOR_BRIDGE_HOOK_MODE=nudge` for the old non-blocking behavior, or `off` to disable.
+Set `POLYAGENT_HOOK_MODE=nudge` for the old non-blocking behavior, or `off` to disable.
 To reset the dedup and see the fires again, start a new session (or delete
 `cursor-bridge-nudged-<session_id>.json` from your OS temp dir — `os.tmpdir()`,
 e.g. `/tmp` on Linux, not necessarily `$TMPDIR`).

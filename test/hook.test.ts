@@ -207,7 +207,7 @@ describe("subagentStartContext — contexto injetado no subagente", () => {
 });
 
 describe("HOOK_MODE=off — no-op total (subprocess)", () => {
-  const offEnv = { ...process.env, CURSOR_BRIDGE_HOOK_MODE: "off" };
+  const offEnv = { ...process.env, POLYAGENT_HOOK_MODE: "off" };
 
   it("SessionStart com off → stdout vazio (não injeta routing prompt)", () => {
     const out = runHook({ hook_event_name: "SessionStart", session_id: "test-off-ss" }, offEnv);
@@ -225,7 +225,7 @@ describe("HOOK_MODE=off — no-op total (subprocess)", () => {
   it("SessionStart sem off (default/redirect) → stdout não-vazio", () => {
     // Isola dedup por session_id único; não depende de ~/.claude.
     const env = { ...process.env };
-    delete env.CURSOR_BRIDGE_HOOK_MODE;
+    delete env.POLYAGENT_HOOK_MODE;
     const out = runHook(
       { hook_event_name: "SessionStart", session_id: `test-on-ss-${Date.now()}` },
       env,

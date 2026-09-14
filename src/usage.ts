@@ -1,7 +1,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 
 /** Arquivo de log de uso (JSONL). Logging só acontece se esta env estiver setada. */
-export const USAGE_LOG = process.env.CURSOR_BRIDGE_LOG;
+export const USAGE_LOG = process.env.POLYAGENT_LOG;
 
 export interface UsageEntry {
   ts: number;
@@ -54,7 +54,7 @@ export function buildUsageEntry(tool: string, outChars: number, tier?: TierRecei
   return { ts: Date.now(), tool, outChars, ...tier, ...run };
 }
 
-/** Registra uma chamada no JSONL. No-op se CURSOR_BRIDGE_LOG não estiver setada. */
+/** Registra uma chamada no JSONL. No-op se POLYAGENT_LOG não estiver setada. */
 export function logUsage(tool: string, outChars: number, tier?: TierReceipt, run?: UsageRun): void {
   if (!USAGE_LOG) return;
   const entry = buildUsageEntry(tool, outChars, tier, run);

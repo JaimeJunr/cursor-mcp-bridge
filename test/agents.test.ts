@@ -28,7 +28,7 @@ describe("resolveAgent", () => {
   const dirs: string[] = [];
   afterEach(() => {
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
-    delete process.env.CURSOR_BRIDGE_AGENT_PATHS;
+    delete process.env.POLYAGENT_AGENT_PATHS;
   });
 
   it("objeto inline com prompt é usado direto (sem tocar o FS)", () => {
@@ -49,7 +49,7 @@ describe("resolveAgent", () => {
     dirs.push(root);
     mkdirSync(join(root, "nested"), { recursive: true });
     writeFileSync(join(root, "nested", "issue-investigator.md"), "---\nname: issue-investigator\n---\nInvestigate root cause.");
-    process.env.CURSOR_BRIDGE_AGENT_PATHS = root;
+    process.env.POLYAGENT_AGENT_PATHS = root;
     const r = resolveAgent("pit:issue-investigator", "/nope");
     expect(r.prompt).toBe("Investigate root cause.");
     expect(r.name).toBe("issue-investigator");
@@ -75,12 +75,12 @@ describe("resolveAgent", () => {
     expect(() => resolveAgent("secret", repo)).toThrow(/agent 'secret' not found/);
   });
 
-  it("aceita CURSOR_BRIDGE_AGENT_PATHS apontando para diretório arbitrário confiável", () => {
+  it("aceita POLYAGENT_AGENT_PATHS apontando para diretório arbitrário confiável", () => {
     const repo = mkdtempSync(join(tmpdir(), "cbx-repo-"));
     const trusted = mkdtempSync(join(tmpdir(), "cbx-trusted-"));
     dirs.push(repo, trusted);
     writeFileSync(join(trusted, "trusted.md"), "Trusted persona.");
-    process.env.CURSOR_BRIDGE_AGENT_PATHS = trusted;
+    process.env.POLYAGENT_AGENT_PATHS = trusted;
 
     expect(resolveAgent("trusted", repo)).toEqual({ prompt: "Trusted persona.", name: "trusted" });
   });
@@ -102,12 +102,12 @@ describe("resolveAgent", () => {
 describe("agentRoots", () => {
   it("inclui roots extras do env antes dos padrões", () => {
     const root = mkdtempSync(join(tmpdir(), "cbx-roots-"));
-    process.env.CURSOR_BRIDGE_AGENT_PATHS = root;
+    process.env.POLYAGENT_AGENT_PATHS = root;
     try {
       expect(agentRoots(tmpdir())[0]).toBe(root);
     } finally {
       rmSync(root, { recursive: true, force: true });
-      delete process.env.CURSOR_BRIDGE_AGENT_PATHS;
+      delete process.env.POLYAGENT_AGENT_PATHS;
     }
   });
 });

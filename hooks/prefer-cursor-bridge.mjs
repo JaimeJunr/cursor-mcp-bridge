@@ -24,17 +24,17 @@
  *  - Never breaks the tool: any error → print nothing, exit 0.
  *
  * Env:
- *  - CURSOR_BRIDGE_HOOK_MIN_LINES: line threshold for the Read nudge (default 300).
- *  - CURSOR_BRIDGE_HOOK_MODE: off | nudge | redirect (padrão redirect).
+ *  - POLYAGENT_HOOK_MIN_LINES: line threshold for the Read nudge (default 300).
+ *  - POLYAGENT_HOOK_MODE: off | nudge | redirect (padrão redirect).
  */
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const PARSED_MIN_LINES = Number(process.env.CURSOR_BRIDGE_HOOK_MIN_LINES);
+const PARSED_MIN_LINES = Number(process.env.POLYAGENT_HOOK_MIN_LINES);
 const MIN_LINES = Number.isFinite(PARSED_MIN_LINES) && PARSED_MIN_LINES > 0 ? PARSED_MIN_LINES : 300;
-const HOOK_MODE = (process.env.CURSOR_BRIDGE_HOOK_MODE ?? "redirect").toLowerCase(); // off | nudge | redirect
+const HOOK_MODE = (process.env.POLYAGENT_HOOK_MODE ?? "redirect").toLowerCase(); // off | nudge | redirect
 const BIG_BYTES = 2 * 1024 * 1024; // acima disto não conta linhas — já é "grande"
 const SKIP_EXT = /\.(png|jpe?g|gif|webp|bmp|ico|pdf|zip|gz|tar|wasm|mp4|mov|woff2?)$/i;
 

@@ -41,55 +41,55 @@ export function parseSessionHandle(handle: string): { engine?: Engine; id: strin
 
 /**
  * Binário do Cursor CLI. Default `cursor-agent` (NÃO `agent`: no PATH do user `agent` pode ser o
- * grok — o bridge quebra ou some por acidente do sandbox). Override via CURSOR_BIN.
+ * grok — o bridge quebra ou some por acidente do sandbox). Override via POLYAGENT_CURSOR_BIN.
  */
-export const CURSOR_BIN = process.env.CURSOR_BIN ?? "cursor-agent";
-/** Binário do Grok CLI. Override via CURSOR_BRIDGE_GROK_BIN. */
-export const GROK_BIN = process.env.CURSOR_BRIDGE_GROK_BIN ?? "grok";
-/** Binário do Codex CLI. Override via CURSOR_BRIDGE_CODEX_BIN. */
-export const CODEX_BIN = process.env.CURSOR_BRIDGE_CODEX_BIN ?? "codex";
-/** Binário do Claude Code CLI. Override via CURSOR_BRIDGE_CLAUDE_BIN. */
-export const CLAUDE_BIN = process.env.CURSOR_BRIDGE_CLAUDE_BIN ?? "claude";
+export const POLYAGENT_CURSOR_BIN = process.env.POLYAGENT_CURSOR_BIN ?? "cursor-agent";
+/** Binário do Grok CLI. Override via POLYAGENT_GROK_BIN. */
+export const GROK_BIN = process.env.POLYAGENT_GROK_BIN ?? "grok";
+/** Binário do Codex CLI. Override via POLYAGENT_CODEX_BIN. */
+export const CODEX_BIN = process.env.POLYAGENT_CODEX_BIN ?? "codex";
+/** Binário do Claude Code CLI. Override via POLYAGENT_CLAUDE_BIN. */
+export const CLAUDE_BIN = process.env.POLYAGENT_CLAUDE_BIN ?? "claude";
 
 /**
  * Modelo default do fallback cursor (só usado quando CURSOR_ENABLED e o engine é cursor). O
  * cursor-agent atual NÃO aceita mais o bracket `[fast=true]` — os ids viraram planos com sufixo
- * (`composer-2.5-fast`). NUNCA `auto`. Override via CURSOR_BRIDGE_MODEL.
+ * (`composer-2.5-fast`). NUNCA `auto`. Override via POLYAGENT_MODEL.
  */
-export const DEFAULT_MODEL = process.env.CURSOR_BRIDGE_MODEL ?? "composer-2.5-fast";
+export const DEFAULT_MODEL = process.env.POLYAGENT_MODEL ?? "composer-2.5-fast";
 
 /**
  * Modelo barato de leitura do `explore`/`read_slice`/`run_filtered`/`web_lookup`: GPT-5.6 Luna via
  * codex (keyless, pela assinatura Codex), rodando read-only (`-s read-only`). Substitui o composer do
  * cursor cancelado — localizar/ler/filtrar pede o modelo mais barato e ágil. Override via
- * CURSOR_BRIDGE_EXPLORE_MODEL. Só se aplica quando o chamador não passa `model`.
+ * POLYAGENT_EXPLORE_MODEL. Só se aplica quando o chamador não passa `model`.
  */
-export const EXPLORE_MODEL = process.env.CURSOR_BRIDGE_EXPLORE_MODEL ?? "gpt-5.6-luna";
+export const EXPLORE_MODEL = process.env.POLYAGENT_EXPLORE_MODEL ?? "gpt-5.6-luna";
 
 /**
  * Modelo codex que dispara o image_gen built-in (gpt-image-2 faz o trabalho pesado; effort baixo basta).
- * Override via CURSOR_BRIDGE_IMAGE_MODEL.
+ * Override via POLYAGENT_IMAGE_MODEL.
  */
-export const IMAGE_MODEL = process.env.CURSOR_BRIDGE_IMAGE_MODEL ?? "gpt-5.6-sol";
+export const IMAGE_MODEL = process.env.POLYAGENT_IMAGE_MODEL ?? "gpt-5.6-sol";
 
 /** Se truthy, passa --force (roda comandos sem prompt). Default off por segurança. */
-export const FORCE = ["1", "true", "yes"].includes((process.env.CURSOR_BRIDGE_FORCE ?? "").toLowerCase());
+export const FORCE = ["1", "true", "yes"].includes((process.env.POLYAGENT_FORCE ?? "").toLowerCase());
 
 /**
  * Fallback para o cursor-agent. O usuário cancelou a assinatura do Cursor, então por padrão os tiers
  * NÃO caem no cursor quando a engine preferida (codex/grok/claude) falta — erram com mensagem clara.
- * Reative o fallback (código do cursor continua íntegro) com CURSOR_BRIDGE_ENABLE_CURSOR=1.
+ * Reative o fallback (código do cursor continua íntegro) com POLYAGENT_ENABLE_CURSOR=1.
  */
 export const CURSOR_ENABLED = ["1", "true", "yes"].includes(
-  (process.env.CURSOR_BRIDGE_ENABLE_CURSOR ?? "").toLowerCase(),
+  (process.env.POLYAGENT_ENABLE_CURSOR ?? "").toLowerCase(),
 );
 
 /**
  * Timeout padrão (ms): rede de segurança generosa contra travamentos reais, não orçamento de trabalho.
- * Override via CURSOR_BRIDGE_TIMEOUT_MS.
+ * Override via POLYAGENT_TIMEOUT_MS.
  */
 function resolveDefaultTimeoutMs(): number {
-  const raw = Number(process.env.CURSOR_BRIDGE_TIMEOUT_MS);
+  const raw = Number(process.env.POLYAGENT_TIMEOUT_MS);
   return Number.isFinite(raw) && raw > 0 ? raw : 1_800_000;
 }
 export const DEFAULT_TIMEOUT_MS = resolveDefaultTimeoutMs();
@@ -102,16 +102,16 @@ export function budgetNote(timeoutMs: number): string {
 }
 
 /** Se truthy, loga o comando spawnado e espelha o stderr do child em tempo real. Debug. */
-export const DEBUG = ["1", "true", "yes"].includes((process.env.CURSOR_BRIDGE_DEBUG ?? "").toLowerCase());
+export const DEBUG = ["1", "true", "yes"].includes((process.env.POLYAGENT_DEBUG ?? "").toLowerCase());
 
 /**
  * Sandbox: por padrão o agent roda dentro de um bubblewrap (`bwrap`) com $HOME isolado —
  * assim o cursor-agent NÃO carrega a config global de behavior do user (~/.cursor/rules,
  * mcp.json, hooks.json, skills, cli-config), que poluía o contexto e, pior, fazia cada
  * chamada tentar subir os MCP servers do user (lentidão/timeout). Só bindamos auth +
- * toolchains. Desliga com CURSOR_BRIDGE_SANDBOX=off (ou 0/false/no/vazio).
+ * toolchains. Desliga com POLYAGENT_SANDBOX=off (ou 0/false/no/vazio).
  */
-const SANDBOX = (process.env.CURSOR_BRIDGE_SANDBOX ?? "bwrap").toLowerCase();
+const SANDBOX = (process.env.POLYAGENT_SANDBOX ?? "bwrap").toLowerCase();
 export const SANDBOX_ON = !["", "off", "0", "false", "no"].includes(SANDBOX);
 
 /** Paths de sistema montados read-only no sandbox (só os que existirem). */
@@ -164,11 +164,11 @@ const SANDBOX_ENGINE_RW: Record<Engine, string[]> = {
 /** Subpaths do HOME liberados RW: caches de build (acelera runs seguidos). */
 const SANDBOX_HOME_RW = [".gradle", ".m2", ".cache/uv", ".cache/pip"];
 /**
- * Paths extras montados RW no sandbox além do cwd, separados por `:` em CURSOR_BRIDGE_SANDBOX_EXTRA.
+ * Paths extras montados RW no sandbox além do cwd, separados por `:` em POLYAGENT_SANDBOX_EXTRA.
  * O sandbox só monta o cwd como workspace; comandos que tocam paths fora dele (ex.: additional
  * working dirs, monorepos irmãos) davam "No such file or directory". Liste-os aqui uma vez.
  */
-const SANDBOX_EXTRA = (process.env.CURSOR_BRIDGE_SANDBOX_EXTRA ?? "")
+const SANDBOX_EXTRA = (process.env.POLYAGENT_SANDBOX_EXTRA ?? "")
   .split(":")
   .map((p) => p.trim())
   .filter(Boolean);
@@ -195,7 +195,7 @@ export interface SandboxSpec {
   systemRo: string[];
   homeRo: string[];
   homeRw: string[];
-  /** paths extras montados RW (CURSOR_BRIDGE_SANDBOX_EXTRA), antes do workspace. */
+  /** paths extras montados RW (POLYAGENT_SANDBOX_EXTRA), antes do workspace. */
   extraBinds: string[];
   extraEnv: Array<[string, string]>;
 }
@@ -558,7 +558,7 @@ export const HEALTH_THRESHOLD = 0.3;
  * Ordem de velocidade observada (mais rápido primeiro), independente de nível de dificuldade —
  * usada por fast_delegate para sempre pegar a engine/modelo mais rápido disponível e saudável,
  * sem escolha manual de nível. Grok, mesmo em modelos "rápidos", mostrou latência de vários
- * minutos em runs reais bem-sucedidos (ver CURSOR_BRIDGE_LOG) — por isso fica por último entre
+ * minutos em runs reais bem-sucedidos (ver POLYAGENT_LOG) — por isso fica por último entre
  * as engines nativas; cursor só entra como fallback final, igual ao resolveTier.
  */
 export const FAST_CANDIDATES: Tier[] = [
@@ -589,7 +589,7 @@ export function resolveFastTier(
     : "none of them is installed";
   const cursorNote = cursorEnabled
     ? " The cursor-agent fallback is also unhealthy."
-    : " Set CURSOR_BRIDGE_ENABLE_CURSOR=1 to fall back to cursor-agent.";
+    : " Set POLYAGENT_ENABLE_CURSOR=1 to fall back to cursor-agent.";
   throw new Error(
     `fast_delegate needs at least one healthy CLI among codex, claude, or grok, but ${reason}.${cursorNote}`,
   );
@@ -616,7 +616,7 @@ export function resolveTier(
   const reason = has(entry.primary.engine) ? "is unhealthy (recent failures/timeouts)" : "is not installed";
   throw new Error(
     `delegate level ${level} needs the '${entry.primary.engine}' CLI, which ${reason}. ` +
-    "Install it, pick another level, or set CURSOR_BRIDGE_ENABLE_CURSOR=1 to fall back to cursor-agent.",
+    "Install it, pick another level, or set POLYAGENT_ENABLE_CURSOR=1 to fall back to cursor-agent.",
   );
 }
 
@@ -670,7 +670,7 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
     const bin = engine === "grok" ? GROK_BIN
       : engine === "codex" ? CODEX_BIN
       : engine === "claude" ? CLAUDE_BIN
-      : CURSOR_BIN;
+      : POLYAGENT_CURSOR_BIN;
     const workspace = runOpts.cwd ?? process.cwd();
 
     // O sandbox bwrap ($HOME isolado) é OBRIGATÓRIO para TODOS os engines — nenhum modelo roda fora

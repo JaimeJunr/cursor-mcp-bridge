@@ -425,7 +425,7 @@ server.registerTool(
   "bridge_stats",
   {
     description:
-      "Report this bridge's usage: calls and chars returned to context per tool (the real cost). Requires CURSOR_BRIDGE_LOG to be set so calls are logged; otherwise reports that logging is off.",
+      "Report this bridge's usage: calls and chars returned to context per tool (the real cost). Requires POLYAGENT_LOG to be set so calls are logged; otherwise reports that logging is off.",
     inputSchema: {},
   },
   async () => {
@@ -434,7 +434,7 @@ server.registerTool(
     if (!tools.length) {
       return {
         content: [
-          { type: "text" as const, text: "No usage logged. Set CURSOR_BRIDGE_LOG=/path/to/log.jsonl to enable logging." },
+          { type: "text" as const, text: "No usage logged. Set POLYAGENT_LOG=/path/to/log.jsonl to enable logging." },
         ],
       };
     }
