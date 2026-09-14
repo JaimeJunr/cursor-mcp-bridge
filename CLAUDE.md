@@ -110,8 +110,11 @@ servers on each run (the "hangs until timeout" symptom).
 Sandboxed, a trivial call drops to ~11k input tokens (−80%). Only auth + toolchains are bound in; the
 workspace (`cwd`) is bound RW as the last mount. Per-engine HOME binds are declared in
 `SANDBOX_ENGINE_RO` and `SANDBOX_ENGINE_RW`: grok and codex need their engine homes RW; Claude gets
-RO `~/.claude/.credentials.json` + `~/.claude.json`, and RW
-`~/.claude/{statsig,projects,todos,shell-snapshots}`. Never bind all of `~/.claude`: agent personas
+RO `~/.claude.json`, and RW
+`~/.claude/{.credentials.json,statsig,projects,todos,shell-snapshots}`. The credential is RW on
+purpose: the CLI renews the subscription oauth and must persist the new pair. Mounted RO, the
+refresh fails with `EROFS` and the already-rotated refresh token stays burned on disk, taking down
+the host's whole auth with `401 OAuth token has been revoked` — not just the worker. Never bind all of `~/.claude`: agent personas
 are resolved on the host and injected as strings, preserving config and cost isolation. Design
 points, all in `cli.ts`:
 

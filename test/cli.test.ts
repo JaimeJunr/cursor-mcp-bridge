@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -300,6 +300,36 @@ describe("buildSandboxArgs", () => {
     } finally {
       grok.cleanup();
       cursor.cleanup();
+      if (oldHome === undefined) delete process.env.HOME;
+      else process.env.HOME = oldHome;
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("monta a credencial do claude como bind RW (o CLI precisa persistir o refresh do oauth)", () => {
+    const oldHome = process.env.HOME;
+    const fakeHome = mkdtempSync(join(tmpdir(), "cbx-test-home-"));
+    mkdirSync(join(fakeHome, ".claude"));
+    writeFileSync(join(fakeHome, ".claude", ".credentials.json"), "{}");
+    process.env.HOME = fakeHome;
+    const claude = buildSandboxSpec("/repo", "claude");
+    const grok = buildSandboxSpec("/repo", "grok");
+    try {
+      const creds = join(fakeHome, ".claude", ".credentials.json");
+      // RO aqui significa EROFS no refresh do token: o CLI renova o oauth, não consegue gravar o
+      // par novo, e o refresh token rotacionado no servidor fica queimado no disco -> 401 revoked.
+      expect(claude.spec.homeRw).toContain(creds);
+      expect(claude.spec.homeRo).not.toContain(creds);
+      const args = buildSandboxArgs(claude.spec);
+      const bind = args.indexOf(creds);
+      expect(args[bind - 1]).toBe("--bind");
+      expect(args[bind + 1]).toBe(creds);
+      // só o engine claude enxerga a credencial
+      expect(grok.spec.homeRw).not.toContain(creds);
+      expect(grok.spec.homeRo).not.toContain(creds);
+    } finally {
+      claude.cleanup();
+      grok.cleanup();
       if (oldHome === undefined) delete process.env.HOME;
       else process.env.HOME = oldHome;
       rmSync(fakeHome, { recursive: true, force: true });
