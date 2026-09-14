@@ -1,0 +1,26 @@
+approved_at: 2026-09-13
+approved_by: jaime.odair@investtools.com.br
+current_tier: update
+current_prd_file: prd-update-1.html
+prd_sha256: 78df6d072ec4d134b821729661e75fca3b514f9037ca20d0dfc5cfb50681addf
+features_sha256: n/a (one-shot, sem features/)
+previous_file: prd.html
+user_stories: 8
+reviewer_iterations: 1 (update); 2 (base prd.html)
+accepted_rc_fails: none
+parked_open_questions:
+  - prd-update-1.html: "fan_out e generate_image também são peso morto? — fora do escopo desta versão"
+  - prd-update-1.html: "publicar no npm sob o nome novo? — rebrand não depende de publicação"
+  - prd-update-1.html: "renomear diretório e remote git? — quebra caminhos absolutos em configs externas"
+  - prd-update-1.html: "migrar para stream-json no claude? — exige trocar o parser"
+  - prd-update-1.html: "codex e claude também usam 402 para saldo/cota? — US-006 varre 402 nos três; fail-safe cobre o resto"
+  - prd-update-1.html: "ralph.sh classificou o 402 como generic error — bug gêmeo, código de outro plugin, reportar upstream"
+notes: |
+  Update 1 motivado por evidência de runtime: em 13/09/2026 a cota do grok estourou
+  durante o preflight do ralph.sh e retornou HTTP 402 com a string "Grok Build usage
+  balance exhausted" — contradizendo a previsão do spike (429 + outra string). O
+  ASSUMPTION-LOCK do PRD base previa exatamente esse gatilho.
+  Evidência: spikes/quota-patterns.md, seção ADENDO.
+  Reviewer do update achou 1 issue (AC herdado afirmando que nenhuma cota havia sido
+  capturada) — corrigido antes do selo.
+  prd.html permanece intacto ao lado como versão anterior selada.

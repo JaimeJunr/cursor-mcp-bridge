@@ -1,0 +1,60 @@
+# Ralph Progress Log
+Started: dom 13 set 2026 22:32:27 -03
+---
+
+## 2026-09-13 - US-001
+- Renomeado package.json/package-lock.json (name, bin) e new McpServer em src/index.ts para "polyagent-mcp"; instructions string e a descrição de session_id do follow_up também deixaram de citar "cursor-mcp-bridge".
+- README.md/INSTALL.md: título, alias de registro do server no host (cursor-bridge → polyagent) em todos os comandos `mcp add`/blocos mcpServers/TOML, e prefixo de permissão mcp__cursor-bridge__* → mcp__polyagent__*. INSTALL.md ganhou frase explícita "the server registers under the host alias polyagent" e menção aos 3 engines no primeiro parágrafo.
+- Deixado intocado por escopo: env vars CURSOR_BRIDGE_* (US-002), tools plan/build e menções a elas (US-003), nome/caminho do hook prefer-cursor-bridge.mjs e seu texto (US-007), repositório GitHub em si (Non-Goals) — os comandos de clone continuam citando cursor-mcp-bridge de propósito.
+- Teste novo test/branding.test.ts (RED confirmado antes da implementação, GREEN depois) trava os 3 pontos centrais do rename.
+- GATE 1 (209/209 verde), GATE 3 (tsc limpo). GATE 2/4 (lint/coverage) não configurados no projeto — pulados com nota, como já era o caso antes desta story.
+- GATE 5: commit 3cbddac.
+- GATE 6 (depth-loop, review-first): TDR via quati-revisor:tdr-runner → validated=yes mechanism=genuine (provado revertendo package.json e observando o teste falhar). Aderência via quati-revisor:qa-reviewer → APPROVE WITH SUGGESTIONS, 0 blockers (1 nota LOW sobre leftovers de "cursor-bridge" em cli.ts/hook, corretamente atribuídos a US-002/US-007, fora de escopo).
+- Learnings:
+  - O AC "alias de registro do server no host" (mcp__<alias>__*) é distinto do McpServer.name/package name — vale documentar essa distinção explicitamente onde aparecer (útil pro leitor do INSTALL.md).
+  - subagent_type do tdr-runner via Agent tool precisa do prefixo do plugin: "quati-revisor:tdr-runner", não "tdr-runner" puro.
+---
+
+## 2026-09-14 - US-003
+- Removidas as tools plan e build (registerTool blocks) de src/index.ts; server passa de 12 para 10 registrations. planPrompt/buildPrompt removidos de src/prompts.ts e test/prompts.test.ts. Instructions do McpServer perdem "Two-phase work: plan → build".
+- RunOpts.mode ("plan"|"ask") em cli.ts e ExploreMode em prompts.ts preservados intactos (homônimos da tool removida) — teste novo confirma buildCodexArgs({mode:"plan"}) ainda emite -s read-only.
+- test/tools.test.ts (novo, 5 testes) trava o contrato: 10 registerTool, sem plan/build, instructions sem "Two-phase work", prompts sem planPrompt/buildPrompt, README com a tabela correta.
+- README.md e CLAUDE.md atualizados: README lista as 10 tools reais (incluindo fast_delegate/fan_out que faltavam); CLAUDE.md resolve todos os blocos 🔄 [US-003], deixando intactos os marcadores de outras stories (US-002/004/005/006/007/008).
+- Implementado via delegate(level=5, claude) — codex (level 1) falhou no spawn (stdin), grok (level 2) com cota esgotada (402 Grok Build usage balance exhausted).
+- GATE 1: 213/213 testes verdes | GATE 2/3: lint não configurado / tsc limpo | GATE 4: coverage não configurado | GATE 5: commit ce6b6d077502adb56c97be2de12fd0973e2d028e | GATE 6: depth-loop PASS (tdr-runner: validated=yes mechanism=genuine, mutation test confirmou guard load-bearing; qa-reviewer: APROVA, 0 blockers, 1 nit LOW não-bloqueante sobre prosa residual no README linha 4).
+- Learnings:
+  - Grok (level 2/4) pode estar com cota esgotada (402) — nesse caso pular direto pra outro level em vez de retry cego. Codex (level 1/3) pode falhar no spawn por stdin ("Reading additional input from stdin...") — sintoma já documentado no CLAUDE.md do projeto (US-008/sandbox), não específico desta story.
+  - Resolution: nenhuma ambiguidade — ACs claros, seguiu-se CLAUDE.md do projeto e o PRD ao pé da letra.
+---
+
+## 2026-09-14 - US-002 (registro manual)
+- Commit 2112ba6 ja existia, review aprovado; worker morreu no session limit do claude antes de gravar.
+- Gates re-verificados independentemente: tsc exit 0, vitest 222/222, ACs 1/2/4/6 por grep no commit.
+- Nenhum codigo novo escrito neste registro.
+
+## 2026-09-14 - US-005
+- Nova classe exportada ProcessError em src/cli.ts (message, stdout, stderr, exitCode readonly); o reject do handler `close` de runOnce passa a lançá-la em vez de Error, sem tocar na string da message.
+- Bloco de fallback de engine (isCodexEnvError sobre message + FALLBACK_ENGINE_ORDER) deixado byte-a-byte idêntico ao commit pai — AC 3 é preservado por inação deliberada, NÃO por trocar para err.stderr (essa migração é candidata da US-006).
+- Não tocados: reject de timeout e de falha de spawn (continuam Error simples) — a story fala de erro de processo (exit != 0).
+- test/process-error.test.ts (novo, 4 testes) mocka node:child_process com child fake; cobre exit!=0 com stderr não-vazio E stdout com JSON de erro, não-regressão da message, ramo stderr-vazio e o fallback do codex.
+- CLAUDE.md: marcador 🔄 [US-005] resolvido (invariante reescrito no presente, citando ProcessError).
+- GATE 1: 226/226 | GATE 2: lint não configurado (n/a) | GATE 3: tsc limpo | GATE 4: coverage não configurado (n/a) | GATE 5: commit 82619471274c6666abf98b39c444cc13372a70f3 | GATE 6: depth-loop PASS (tdr-runner validated=yes mechanism=genuine com mutation test; qa-reviewer APROVA COM SUGESTÕES, 0 blockers, 5/5 ACs).
+- Learnings:
+  - Testar runCursor sem spawnar de verdade: `vi.mock("node:child_process")` + child fake (EventEmitter com stdout/stderr/kill) e `process.env.POLYAGENT_SANDBOX = "off"` ANTES do `await import("../src/cli.js")` — os consts de env são lidos no load do módulo.
+  - hasEngine/binExists varrem o PATH real em tempo de chamada: qualquer teste que exercite o fallback de engine precisa stubar process.env.PATH com um dir fake, senão passa/falha conforme os CLIs instalados na máquina.
+  - Resolution: nenhuma ambiguidade — ACs explícitos, seguiu-se o CLAUDE.md do projeto.
+---
+
+## 2026-09-14 - US-008
+- src/cli.ts: novas exportadas sandboxPreflight(sandboxOn = SANDBOX_ON) e assertReadOnlyEngine(tool, engine, sandboxOn = SANDBOX_ON), mais a const única BWRAP_MISSING. O ramo `else if (SANDBOX_ON)` de runOnce deixou de escrever aviso em stderr e passou a `return Promise.reject(new Error(BWRAP_MISSING))` — reject, não throw síncrono, porque runCursor encadeia .catch() sobre o retorno de runOnce (throw síncrono escaparia do fallback de engine).
+- src/index.ts: sandboxPreflight() chamado logo antes de `new StdioServerTransport()`/server.connect (falha na inicialização em vez de subir degradado); os 3 handlers read-only (explore/read_slice/web_lookup) passaram a declarar `const engine: Engine = "codex"` e chamar assertReadOnlyEngine(<tool>, engine). O handler de web_lookup virou bloco (era arrow de expressão).
+- README.md: bubblewrap entra em Requirements como **required**, not recommended; a linha de POLYAGENT_SANDBOX na tabela de env perdeu "falls back to unsandboxed" e ganhou a regra do read-only só-codex. INSTALL.md: `bwrap --version` no bloco de prerequisites + "stop and report" se faltar.
+- CLAUDE.md: marcador 🔄 [US-008] resolvido (invariante do sandbox reescrito no presente, citando sandboxPreflight/BWRAP_MISSING/assertReadOnlyEngine); o invariante compartilhado com US-004 perdeu a menção a US-008 e agora aponta o guard como base para a US-004.
+- test/sandbox-required.test.ts (novo, 8 testes): bwrap presente (spawn recebe o bwrap fake), ausente (rejeita nomeando o remédio e nunca chama spawn), preflight nos dois sentidos, e o guard read-only com sandbox off.
+- GATE 1: 234/234 | GATE 2: lint não configurado (n/a) | GATE 3: tsc limpo | GATE 4: coverage não configurado (n/a) | GATE 5: commit a2f97ff49edc95b642acb5256a8e111c7394f484 | GATE 6: depth-loop PASS (tdr-runner validated=yes mechanism=genuine, mutação dos 3 guards derrubou o teste correspondente em cada caso; qa-reviewer APROVA COM SUGESTÕES, 0 blockers, 7/7 ACs, sem vazamento da US-004).
+- Learnings:
+  - Testar o bwrap sem instalá-lo: stubar process.env.PATH com um mkdtemp e (quando o caminho "presente" for o alvo) escrever um arquivo `bwrap` nele. bwrapPath() lê o PATH em call time, então dá pra alternar por teste sem remontar o módulo — diferente de SANDBOX_ON, que é const de load do módulo (por isso os guards recebem `sandboxOn` como parâmetro com default).
+  - Child fake + engine "codex" não combina: codex usa parseCodexJsonl, então um fake `{result, session_id}` não é lido. Para testes de spawn que não são sobre o parser, use engine "claude" (parseCliJson).
+  - Achados LOW do review, candidatos naturais da US-004 (não corrigidos aqui por escopo): (a) assertReadOnlyEngine é inalcançável enquanto o engine das 3 tools for literal "codex" — vira efetivo quando a US-004 tornar o engine variável; (b) follow_up com mode + engine vindo do session handle não passa pelo guard; (c) o teste novo (como test/process-error.test.ts) muta process.env.PATH global — o reviewer observou 1 falha em 29 execuções da suíte completa, não reproduzida em 28 tentativas; se virar flake de CI, injetar o PATH nas funções puras em vez de mutar o global.
+  - Resolution: nenhuma ambiguidade — ACs explícitos, seguiu-se o CLAUDE.md do projeto.
+---
