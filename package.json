@@ -1,10 +1,10 @@
 {
-  "name": "cursor-mcp-bridge",
+  "name": "polyagent-mcp",
   "version": "0.5.0",
-  "description": "MCP server that lets any agent delegate to the Cursor CLI agent (agent -p) — cheap/fast delegation, exploration, surgical reads, filtered command output, and web lookup with model and effort control.",
+  "description": "MCP server that lets any agent delegate to headless Codex, Grok, and Claude Code CLIs — cheap/fast delegation, exploration, surgical reads, filtered command output, and web lookup with model and effort control, with Cursor available as an opt-in fallback.",
   "type": "module",
   "bin": {
-    "cursor-mcp-bridge": "dist/index.js"
+    "polyagent-mcp": "dist/index.js"
   },
   "files": [
     "dist"

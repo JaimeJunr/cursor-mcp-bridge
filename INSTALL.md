@@ -1,16 +1,19 @@
-# Installing cursor-mcp-bridge — agent guide
+# Installing polyagent-mcp — agent guide
 
-> **You are an AI coding agent reading this because the user asked you to install
-> cursor-mcp-bridge.** Follow the steps in order. Every command is copy-paste; the only
-> value you must fill in is `<ABS_PATH>` — the absolute path of this repo (`pwd` after step 1).
-> Do read-only checks first, register only in the host(s) the user actually uses, then verify.
+> **You are an AI coding agent reading this because the user asked you to install**
+> **polyagent-mcp, the MCP server that delegates to headless Codex, Grok, and Claude Code CLIs**
+> (Cursor is an opt-in fallback). Follow the steps in order. Every command is copy-paste; the
+> only value you must fill in is `<ABS_PATH>` — the absolute path of this repo (`pwd` after
+> step 1). Do read-only checks first, register only in the host(s) the user actually uses, then
+> verify. The server registers under the host alias `polyagent` — that alias, not the package
+> name, is what fixes the `mcp__polyagent__*` tool prefix seen in permission allowlists below.
 
 ## What this installs
 
-An MCP **stdio** server that lets the host agent delegate to the **Cursor CLI agent**
-(`agent -p`) as a cheap/fast worker — routine edits, project mapping, surgical reads, filtered
-command output, web lookups — so that work never burns the host agent's context. See
-[`README.md`](README.md) for the tool list and env vars.
+An MCP **stdio** server that lets the host agent delegate to headless **Codex, Grok, and
+Claude Code CLIs** — routine edits, project mapping, surgical reads, filtered command output,
+web lookups — so that work never burns the host agent's context. Cursor is available as an
+opt-in fallback. See [`README.md`](README.md) for the tool list and env vars.
 
 ## 0. Prerequisites — verify, don't assume
 
@@ -54,14 +57,14 @@ Ask the user which to install for if it is ambiguous. Register only where they w
 ### Claude Code
 
 ```bash
-claude mcp add cursor-bridge -s user -- node <ABS_PATH>/dist/index.js
+claude mcp add polyagent -s user -- node <ABS_PATH>/dist/index.js
 ```
 
 `-s user` installs it globally for the user. Use `-s project` to scope it to the current repo
 (writes `.mcp.json`). Manual alternative — add to `~/.claude.json` or project `.mcp.json`:
 
 ```json
-{ "mcpServers": { "cursor-bridge": { "command": "node", "args": ["<ABS_PATH>/dist/index.js"] } } }
+{ "mcpServers": { "polyagent": { "command": "node", "args": ["<ABS_PATH>/dist/index.js"] } } }
 ```
 
 ### Cursor
@@ -69,19 +72,19 @@ claude mcp add cursor-bridge -s user -- node <ABS_PATH>/dist/index.js
 Global: `~/.cursor/mcp.json`. Project-scoped: `.cursor/mcp.json` at the repo root. Same shape:
 
 ```json
-{ "mcpServers": { "cursor-bridge": { "command": "node", "args": ["<ABS_PATH>/dist/index.js"] } } }
+{ "mcpServers": { "polyagent": { "command": "node", "args": ["<ABS_PATH>/dist/index.js"] } } }
 ```
 
 ### OpenAI Codex CLI
 
 ```bash
-codex mcp add cursor-bridge -- node <ABS_PATH>/dist/index.js
+codex mcp add polyagent -- node <ABS_PATH>/dist/index.js
 ```
 
 Manual alternative — add to `~/.codex/config.toml` (TOML, not JSON):
 
 ```toml
-[mcp_servers.cursor-bridge]
+[mcp_servers.polyagent]
 command = "node"
 args = ["<ABS_PATH>/dist/index.js"]
 ```
@@ -89,13 +92,13 @@ args = ["<ABS_PATH>/dist/index.js"]
 ### Grok CLI (xAI)
 
 ```bash
-grok mcp add cursor-bridge -- node <ABS_PATH>/dist/index.js
+grok mcp add polyagent -- node <ABS_PATH>/dist/index.js
 ```
 
 Manual alternative — add to `~/.grok/config.toml`:
 
 ```toml
-[mcp_servers.cursor-bridge]
+[mcp_servers.polyagent]
 command = "node"
 args = ["<ABS_PATH>/dist/index.js"]
 ```
@@ -109,7 +112,7 @@ Almost every other host takes the same stdio JSON. Find its MCP config file (usu
 `mcp.json` or a `mcpServers` block in the host's `settings.json`) and add:
 
 ```json
-{ "mcpServers": { "cursor-bridge": { "command": "node", "args": ["<ABS_PATH>/dist/index.js"] } } }
+{ "mcpServers": { "polyagent": { "command": "node", "args": ["<ABS_PATH>/dist/index.js"] } } }
 ```
 
 To pass configuration (see [`README.md`](README.md) env table), add an `"env"` object, e.g.
@@ -128,7 +131,7 @@ scope `.claude/settings.json`). Pick one option:
 ```json
 {
   "permissions": {
-    "allow": ["mcp__cursor-bridge__*"]
+    "allow": ["mcp__polyagent__*"]
   }
 }
 ```
@@ -144,11 +147,11 @@ mutating ones still prompt so you can review each change:
 {
   "permissions": {
     "allow": [
-      "mcp__cursor-bridge__explore",
-      "mcp__cursor-bridge__read_slice",
-      "mcp__cursor-bridge__web_lookup",
-      "mcp__cursor-bridge__plan",
-      "mcp__cursor-bridge__bridge_stats"
+      "mcp__polyagent__explore",
+      "mcp__polyagent__read_slice",
+      "mcp__polyagent__web_lookup",
+      "mcp__polyagent__plan",
+      "mcp__polyagent__bridge_stats"
     ]
   }
 }
@@ -163,12 +166,12 @@ and other hosts have their own approval settings — consult the host.
 ## 4. Verify the registration
 
 ```bash
-claude mcp list                 # Claude Code — expect: cursor-bridge … ✔ Connected
+claude mcp list                 # Claude Code — expect: polyagent … ✔ Connected
 codex mcp list                  # Codex
 grok mcp list                   # Grok
 ```
 
-For Cursor and GUI hosts: reload/restart the host and confirm `cursor-bridge` shows its tools
+For Cursor and GUI hosts: reload/restart the host and confirm `polyagent` shows its tools
 (`delegate`, `explore`, `read_slice`, `run_filtered`, `web_lookup`, `follow_up`, `bridge_stats`).
 Report the connection status back to the user.
 

@@ -1,4 +1,4 @@
-# cursor-mcp-bridge
+# polyagent-mcp
 
 MCP server that lets **any** agent or MCP host delegate to headless **Codex, Grok, and Claude Code
 CLIs**, with Cursor available as an opt-in fallback. Use the fleet for implementation, planning,
@@ -53,14 +53,14 @@ npm run build
 
 **Claude Code:**
 ```bash
-claude mcp add cursor-bridge -s user -- node /abs/path/to/cursor-mcp-bridge/dist/index.js
+claude mcp add polyagent -s user -- node /abs/path/to/cursor-mcp-bridge/dist/index.js
 ```
 
 **Any host** — add to its `mcp.json`:
 ```json
 {
   "mcpServers": {
-    "cursor-bridge": {
+    "polyagent": {
       "command": "node",
       "args": ["/abs/path/to/cursor-mcp-bridge/dist/index.js"]
     }
@@ -70,7 +70,7 @@ claude mcp add cursor-bridge -s user -- node /abs/path/to/cursor-mcp-bridge/dist
 
 **Permissions (Claude Code):** `claude mcp add` registers the server but does **not** grant
 tool permission — without an allowlist every bridge call prompts for approval. After
-registering, add either `"mcp__cursor-bridge__*"` (full; also auto-approves mutating tools
+registering, add either `"mcp__polyagent__*"` (full; also auto-approves mutating tools
 `delegate`/`build`/`run_filtered`/`follow_up`) or a read-only subset
 (`explore`/`read_slice`/`web_lookup`/`plan`/`bridge_stats`) under
 `permissions.allow` in `settings.json`. Full options and trade-offs:

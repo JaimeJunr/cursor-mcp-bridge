@@ -22,10 +22,10 @@ import {
 import { scrubSecrets } from "./scrub.js";
 
 const server = new McpServer(
-  { name: "cursor-mcp-bridge", version: "0.5.0" },
+  { name: "polyagent-mcp", version: "0.5.0" },
   {
     instructions:
-      "cursor-mcp-bridge offloads work to cheap headless CLIs so you do not spend your own context. Routing: pure reading or locating a specific slice → read_slice; mapping or searching the codebase → explore; running a noisy command and keeping only the signal → run_filtered; web or docs lookup → web_lookup; self-contained implementation, commits, PRs, multi-file edits, or running and fixing a build → delegate (level 1-5). Two-phase work: plan → build. Prefer these tools over native Read, Grep, WebSearch, or Bash for pure reading, locating, web lookup, and grunt work; use native Read only when you are about to edit that file. Every tool returns a session_id for follow_up.",
+      "polyagent-mcp offloads work to cheap headless CLIs so you do not spend your own context. Routing: pure reading or locating a specific slice → read_slice; mapping or searching the codebase → explore; running a noisy command and keeping only the signal → run_filtered; web or docs lookup → web_lookup; self-contained implementation, commits, PRs, multi-file edits, or running and fixing a build → delegate (level 1-5). Two-phase work: plan → build. Prefer these tools over native Read, Grep, WebSearch, or Bash for pure reading, locating, web lookup, and grunt work; use native Read only when you are about to edit that file. Every tool returns a session_id for follow_up.",
   },
 );
 
@@ -485,7 +485,7 @@ server.registerTool(
     description:
       "Continue a previous Cursor session by session_id (returned by every other tool). The prior context lives on Cursor's side, so you don't resend it. When continuing a read-only session (explore/read_slice/web_lookup), pass mode:'ask' to keep it read-only — otherwise the resumed run regains full tool access.",
     inputSchema: {
-      session_id: z.string().describe("The session id returned by a previous cursor-mcp-bridge call."),
+      session_id: z.string().describe("The session id returned by a previous polyagent-mcp call."),
       question: z.string().describe("The follow-up question."),
       mode: z
         .enum(["plan", "ask"])
