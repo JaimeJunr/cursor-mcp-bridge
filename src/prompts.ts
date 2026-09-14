@@ -145,36 +145,6 @@ export function webLookupPrompt(query: string): string {
   return `Look this up on the web and answer concisely with sources/links.\n\nQuery: ${query}`;
 }
 
-/**
- * plan (fase 1 do plan→build): um modelo forte lê a codebase e devolve um PLANO de implementação,
- * sem editar nada. O plano é revisado/aprovado pelo chamador e então passado ao `build`.
- */
-export function planPrompt(task: string): string {
-  return [
-    "Produce a concrete, actionable implementation PLAN for the task below. DO NOT write or edit any code — planning only.",
-    "Read whatever files you need to ground the plan in the REAL codebase (cite actual paths and symbols).",
-    "Structure it as: (1) one-paragraph approach; (2) numbered steps, each naming the files to touch and a verification check; (3) risks/edge cases; (4) how to test.",
-    "Be specific and tight — no boilerplate, no preamble.",
-    "",
-    `Task: ${task}`,
-  ].join("\n");
-}
-
-/**
- * build (fase 2 do plan→build): o executor implementa um PLANO já aprovado (saída do `plan`),
- * com acesso total (edições + testes). Segue o plano fielmente.
- */
-export function buildPrompt(plan: string): string {
-  return [
-    "Implement the APPROVED plan below. Follow it faithfully; if you must deviate, say why in your final summary.",
-    "Write the code AND the tests. Run the tests and make them pass before finishing.",
-    "Keep the change minimal and match the existing code style. Return a concise summary (files changed, tests run).",
-    "",
-    "=== APPROVED PLAN ===",
-    plan,
-  ].join("\n");
-}
-
 /** Saída de um worker do `fan_out`, repassada ao arbiter para comparação. */
 export interface FanOutWorkerOutput {
   engine: string;

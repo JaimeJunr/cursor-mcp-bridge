@@ -41,19 +41,17 @@ There is no linter configured. `npm run build` (tsc, `strict: true`) is the type
 Five small modules under `src/`, with pure logic covered by `test/*.test.ts`. The split exists so
 the **pure logic is testable without spawning a worker process**:
 
-- `index.ts` — MCP server + tool registrations (twelve tools: `delegate`, `fast_delegate`, `explore`,
-  `read_slice`, `run_filtered`, `web_lookup`, `plan`, `build`, `fan_out`, `generate_image`,
-  `follow_up`, `bridge_stats`).
-  🔄 [US-003] `plan` e `build` saem: passa a dez `registerTool`, e a string `instructions` perde o
-  trecho "Two-phase work: plan → build".
+- `index.ts` — MCP server + tool registrations (ten tools: `delegate`, `fast_delegate`, `explore`,
+  `read_slice`, `run_filtered`, `web_lookup`, `fan_out`, `generate_image`, `follow_up`,
+  `bridge_stats`).
   Owns tool descriptions and the shared `routing` params (`cwd`/`model`/`effort`). The second arg
   to `new McpServer(...)` is an `instructions` string that states the routing boundary
   (read/locate/web/grunt-work → bridge tools; native Read only when about to edit). These load at
   **startup** and are visible to the host even while tool schemas are deferred — that is why they
   matter for adoption. The five core tools (`delegate`, `explore`, `read_slice`, `run_filtered`,
   `web_lookup`) register with `_meta: { "anthropic/alwaysLoad": true }` so Claude Code (≥2.1.121)
-  eagerly loads their schemas; secondary tools (`fast_delegate`, `plan`, `build`, `fan_out`,
-  `generate_image`, `follow_up`, `bridge_stats`) stay deferred. `format()` appends the `session_id`
+  eagerly loads their schemas; secondary tools (`fast_delegate`, `fan_out`, `generate_image`,
+  `follow_up`, `bridge_stats`) stay deferred. `format()` appends the `session_id`
   footer and logs usage;
   `follow_up` feeds that id back as `RunOpts.resume` so a prior worker session continues without
   resending its context — the footer and `follow_up` are two ends of the same loop.
@@ -65,8 +63,7 @@ the **pure logic is testable without spawning a worker process**:
   dispatcher), `resolveModel()`, `parseCliJson()`/`parseCodexJsonl()` (+ `parseOutput` dispatcher),
   `resolveTier()`, `resolveFastTier()`, `hasEngine()`, `binExists()`, `budgetNote()` are **pure** and
   unit-tested. Keep the spawn boundary here — do not spawn from elsewhere.
-- 🔄 [US-003] `build` sai desta lista quando a tool for removida.
-  `agents.ts` — resolves an optional `delegate`/`fast_delegate`/`build` persona on the host. A name such as
+- `agents.ts` — resolves an optional `delegate`/`fast_delegate` persona on the host. A name such as
   `pit:issue-investigator` searches project/home `.claude/agents` and `~/.claude/plugins`; plugin
   collisions pick the newest match by mtime. An inline `{prompt}` skips lookup. Only the markdown
   body crosses into the worker, and names containing `/` or `..` are rejected.
@@ -110,9 +107,8 @@ otherwise it throws a clear error naming the missing CLI.
 healthy candidate in the measured speed order Codex Luna low → Claude Haiku → Grok 4.5 low, then the
 opt-in Cursor `DEFAULT_MODEL` as the final fallback. It keeps the same full read/edit/shell access,
 persona resolution, timeout budget note, and explicit `model`/`effort` overrides as `delegate`.
-- 🔄 [US-003] `planPrompt`/`buildPrompt` saem de `prompts.ts` (e de `test/prompts.test.ts`).
-  `prompts.ts` — pure prompt builders (`readSlicePrompt`, `runFilteredPrompt`, `explorePrompt`,
-  `webLookupPrompt`, `planPrompt`, `buildPrompt`). The tools' behavior lives in these prompt strings,
+- `prompts.ts` — pure prompt builders (`readSlicePrompt`, `runFilteredPrompt`, `explorePrompt`,
+  `webLookupPrompt`, `generateImagePrompt`, `fanOutArbiterPrompt`). The tools' behavior lives in these prompt strings,
   so changing a tool's contract usually means editing a prompt here (and its test), not `cli.ts`.
 - `usage.ts` — JSONL usage log behind `CURSOR_BRIDGE_LOG`; drives the `bridge_stats` tool.
 
@@ -185,20 +181,17 @@ points, all in `cli.ts`:
 
 ### Key invariants (violating these breaks tools or tests)
 
-- 🔄 [US-003, US-004, US-008] **Read-only modes are load-bearing for safety.** As menções a
-  `plan`/`build` **como tools** somem (elas são removidas), mas o `RunOpts.mode` read-only
-  **permanece** — é o modo do codex, homônimo da tool. As três auxiliares deixam de ser fixas no
-  codex (engine por env/parâmetro), e por isso a garantia de read-only fora do codex passa a vir do
-  **sandbox bwrap, que vira obrigatório**: no nível do engine `buildGrokArgs` ignora `mode` e emite
-  sempre `--always-approve`, e no claude `mode` emite `--dangerously-skip-permissions` — o oposto de
-  read-only. A resolução recusa, nomeando o motivo, um engine que não atenda o requisito da tool.
+- 🔄 [US-004, US-008] **Read-only modes are load-bearing for safety.** As três auxiliares deixam de
+  ser fixas no codex (engine por env/parâmetro), e por isso a garantia de read-only fora do codex
+  passa a vir do **sandbox bwrap, que vira obrigatório**: no nível do engine `buildGrokArgs` ignora
+  `mode` e emite sempre `--always-approve`, e no claude `mode` emite `--dangerously-skip-permissions`
+  — o oposto de read-only. A resolução recusa, nomeando o motivo, um engine que não atenda o
+  requisito da tool.
   `explore`, `read_slice`, and `web_lookup` run on
   codex with `RunOpts.mode`, which `buildCodexArgs` converts to `-s read-only -c
-  approval_policy="never"`. `plan` also passes a mode: its default level 3 gets hard Codex
-  read-only; level 5 Claude is read-only by prompt only, and force OR mode must still add
-  `--dangerously-skip-permissions` so Claude headless does not hang. `run_filtered`, `delegate`, and
-  `build` omit mode and get full/bypass access because they execute commands or edit. Do not
-  silently remove a read-only tool's mode.
+  approval_policy="never"`; `follow_up` takes the same mode to keep a resumed read-only session
+  read-only. `run_filtered` and `delegate` omit mode and get full/bypass access because they execute
+  commands or edit. Do not silently remove a read-only tool's mode.
 - 🔄 [US-001, US-002] **The Cursor fallback default is `composer-2.5-fast`, never the old bracket
   or `auto`.** O default em si não muda; o que muda é o nome: toda env var `CURSOR_BRIDGE_*` citada
   neste arquivo vira `POLYAGENT_*` com o mesmo sufixo (aqui, `POLYAGENT_MODEL`) e `CURSOR_BIN` vira
@@ -229,18 +222,13 @@ points, all in `cli.ts`:
   `-c tools.web_search=true` for real web search; `run_filtered` deliberately omits mode and uses
   bypass so it can run the requested command. `explore` takes `breadth` (`medium`|`thorough`) and
   LOCATES, never reviews.
-- 🔄 [US-003] **`plan` and `build` are a two-phase boundary.** Ambas as tools são removidas, junto
-  com `planPrompt`/`buildPrompt` em `prompts.ts` e seus testes; o tipo `RunOpts.mode: "plan" | "ask"`
-  e `ExploreMode` **permanecem** (são o modo read-only do codex, homônimos da tool).
-  `plan(task, level=3)` uses a strong planner and
-  returns an implementation plan without editing; default Codex Sol xhigh is hard read-only, while
-  level 5 Opus max relies on the prompt for read-only behavior. `build(plan, level=1, agent?)` implements
-  the approved plan with full access, defaulting to the cheap Luna max executor. Keep `planPrompt` and
-  `buildPrompt` aligned with that contract.
-- 🔄 [US-003] **Agent personas are additive and cross-engine.** Com `build` removida, só `delegate`
-  (e `fast_delegate`) aceita persona; o mecanismo cross-engine não muda.
-  `delegate` and `build` accept a named or inline
-  agent. Resolve it on the host in `agents.ts`, then pass its body via `RunOpts.agentPrompt`: Claude
+- **`plan` and `build` no longer exist as tools.** They were removed together with `planPrompt`/
+  `buildPrompt` in `prompts.ts` and their tests; the server registers ten tools. What survives is the
+  homonym: `RunOpts.mode: "plan" | "ask"` in `cli.ts` and `ExploreMode` in `prompts.ts` are the codex
+  read-only mode (`-s read-only`), used by `explore`/`read_slice`/`web_lookup` and `follow_up` — do
+  not delete them chasing the removed tool. `test/tools.test.ts` pins the ten-tool surface.
+- **Agent personas are additive and cross-engine.** `delegate` and `fast_delegate` accept a named or
+  inline agent. Resolve it on the host in `agents.ts`, then pass its body via `RunOpts.agentPrompt`: Claude
   `--append-system-prompt`, Grok `--rules`, Codex `-c developer_instructions=` encoded by
   `tomlString`, Cursor prompt prefix. Do not mount agent directories into the sandbox.
 - **`read_slice` must return source lines, not just `file:line` prefixes** — this is an explicit
@@ -265,21 +253,17 @@ points, all in `cli.ts`:
   `stderr.trim() || stdout.trim()` e passa a carregar `{stdout, stderr, exitCode}` separados — o JSON
   estruturado dos CLIs sai em **stdout** e hoje se perde sempre que `stderr` tem qualquer conteúdo.
   `error.message` não regride (mesmo texto de antes) e `isCodexEnvError` continua lendo `stderr`.
-- 🔄 [US-003] **Core tools are `alwaysLoad`.** Só muda a lista do conjunto secundário deferred, que
-  perde `plan`/`build`; o resto do invariante segue valendo integralmente.
-  The five core tools (`delegate`, `explore`, `read_slice`,
+- **Core tools are `alwaysLoad`.** The five core tools (`delegate`, `explore`, `read_slice`,
   `run_filtered`, `web_lookup`) register with `_meta: { "anthropic/alwaysLoad": true }` so Claude
   Code (≥2.1.121) eagerly loads their schemas instead of deferring them. Deferred tools lose to
   always-loaded native Read/Grep — that was the root adoption bug. Secondary tools
-  (`fast_delegate`, `generate_image`, `plan`, `build`, `fan_out`, `follow_up`, `bridge_stats`) stay
-  deferred. Do not strip
+  (`fast_delegate`, `generate_image`, `fan_out`, `follow_up`, `bridge_stats`) stay deferred. Do not
+  strip
   `alwaysLoad` from the core five or add it to the secondary set without intent.
-- 🔄 [US-003] **Timeout is a safety net, not a work budget.** A lista de tools de execução que
-  recebem `budgetNote` perde `plan` e `build`, ficando em `delegate`/`fast_delegate`.
-  `DEFAULT_TIMEOUT_MS` is 30 min (`1_800_000`),
+- **Timeout is a safety net, not a work budget.** `DEFAULT_TIMEOUT_MS` is 30 min (`1_800_000`),
   overridable via `CURSOR_BRIDGE_TIMEOUT_MS`. Pure helper `budgetNote(timeoutMs)` appends a
-  `[Time budget: ~N min ... return partial results ...]` note to the prompt of the four
-  **execution** tools (`delegate`, `fast_delegate`, `plan`, `build`) so the worker self-manages instead of being
+  `[Time budget: ~N min ... return partial results ...]` note to the prompt of the two
+  **execution** tools (`delegate`, `fast_delegate`) so the worker self-manages instead of being
   killed blind. Read tools (`explore`, `read_slice`, `run_filtered`, `web_lookup`) do not get it.
   Keep that split.
 

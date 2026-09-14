@@ -429,8 +429,8 @@ export function buildClaudeArgs(opts: RunOpts): string[] {
   if (opts.effort) args.push("--effort", opts.effort);
   if (opts.agentPrompt) args.push("--append-system-prompt", opts.agentPrompt); // canal nativo do claude
   // Headless PRECISA auto-aprovar ou pendura esperando confirmação (inclusive `--permission-mode plan`,
-  // que trava pedindo aprovação do plano). force (delegate/build) e mode (plan) rodam não-interativos →
-  // skip-permissions. O read-only "duro" do plan fica com o codex (-s read-only); no claude o plan é
+  // que trava pedindo aprovação do plano). force (delegate) e mode read-only rodam não-interativos →
+  // skip-permissions. O read-only "duro" do mode fica com o codex (-s read-only); no claude ele é
   // read-only por prompt + sandbox (o worker é instruído a não editar e o sandbox contém o raio ao cwd).
   if (FORCE || opts.force || opts.mode) args.push("--dangerously-skip-permissions");
   if (opts.resume) args.push("--resume", opts.resume);

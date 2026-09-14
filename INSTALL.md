@@ -136,7 +136,7 @@ scope `.claude/settings.json`). Pick one option:
 }
 ```
 
-This also auto-approves the **mutating** tools — `delegate`, `build`, `run_filtered`, and
+This also auto-approves the **mutating** tools — `delegate`, `fast_delegate`, `run_filtered`, and
 `follow_up` — which edit files and run shell in the worker's sandbox. Fine if you trust the
 bridge; the worker is sandboxed to `cwd`.
 
@@ -150,15 +150,14 @@ mutating ones still prompt so you can review each change:
       "mcp__polyagent__explore",
       "mcp__polyagent__read_slice",
       "mcp__polyagent__web_lookup",
-      "mcp__polyagent__plan",
       "mcp__polyagent__bridge_stats"
     ]
   }
 }
 ```
 
-With Option B, `delegate` / `build` / `run_filtered` / `follow_up` / `generate_image` still
-prompt before running, while reading / locating / web / planning stay frictionless.
+With Option B, `delegate` / `fast_delegate` / `run_filtered` / `follow_up` / `generate_image` still
+prompt before running, while reading / locating / web lookups stay frictionless.
 
 Merge into any existing `permissions.allow` array (do not wipe other entries). Cursor, Codex,
 and other hosts have their own approval settings — consult the host.
