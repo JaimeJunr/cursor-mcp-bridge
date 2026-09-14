@@ -6,7 +6,7 @@ import {
   runCursor, EXPLORE_MODEL, IMAGE_MODEL, DEFAULT_TIMEOUT_MS, budgetNote,
   formatSessionHandle, parseSessionHandle, hasEngine, resolveTier, resolveFastTier, FAST_CANDIDATES,
   isDefaultTierEngine, withTerseStyle,
-  raceFirstSuccess, CURSOR_ENABLED, sandboxPreflight, assertReadOnlyEngine,
+  raceFirstSuccess, CURSOR_ENABLED, sandboxPreflight, resolveAuxTool,
   type CliResult, type Engine,
 } from "./cli.js";
 import { resolveAgent } from "./agents.js";
@@ -219,15 +219,18 @@ server.registerTool(
         .enum(["medium", "thorough"])
         .optional()
         .describe("How wide to sweep on a fan-out search (no `files`). 'thorough' chases every plausible location/naming convention. Default 'medium'."),
+      engine: z
+        .string()
+        .optional()
+        .describe("Engine override for this call: 'codex' (default), 'grok', 'claude' or 'cursor'. Beats POLYAGENT_EXPLORE_ENGINE. explore is read-only: a non-codex engine needs the sandbox on."),
       ...routing,
     },
   },
-  async ({ question, files, breadth, cwd, model, effort }) => {
+  async ({ question, files, breadth, cwd, model, effort, engine: engineParam }) => {
     const { prompt, mode } = explorePrompt(question, files, breadth);
-    // codex read-only (mode) com o modelo barato de leitura (luna). O worker localiza/mapeia sem editar.
-    const engine: Engine = "codex";
-    assertReadOnlyEngine("explore", engine);
-    return format("explore", await runCursor({ prompt, cwd, engine, model: model ?? EXPLORE_MODEL, effort, mode, agentPrompt: withTerseStyle() }));
+    // read-only (mode) com o modelo barato de leitura (luna) por default. O worker localiza/mapeia sem editar.
+    const { engine, model: auxModel } = resolveAuxTool("explore", { engine: engineParam, model });
+    return format("explore", await runCursor({ prompt, cwd, engine, model: auxModel, effort, mode, agentPrompt: withTerseStyle() }));
   },
 );
 
@@ -239,11 +242,15 @@ server.registerTool(
       "Read-only surgical read: the Cursor agent reads the given file(s) and returns ONLY the code relevant to `want` (exact lines with file:line), never the whole file. Full-file/verbatim dump requests are refused by design and enforced before the worker is spawned. Use instead of Read when you need a specific function/section from large files — the full file never enters your context.",
     inputSchema: {
       files: z.array(z.string()).min(1).describe("File paths to read from (relative to cwd or absolute)."),
+      engine: z
+        .string()
+        .optional()
+        .describe("Engine override for this call: 'codex' (default), 'grok', 'claude' or 'cursor'. Beats POLYAGENT_READ_SLICE_ENGINE. read_slice is read-only: a non-codex engine needs the sandbox on."),
       want: z.string().describe("What to extract, e.g. 'the login handler and its imports'."),
       ...routing,
     },
   },
-  async ({ files, want, cwd, model, effort }) => {
+  async ({ files, want, cwd, model, effort, engine: engineParam }) => {
     if (isFullFileRequest(want)) {
       return format("read_slice_refused", {
         text: [
@@ -255,9 +262,8 @@ server.registerTool(
         ].join(" "),
       });
     }
-    const engine: Engine = "codex";
-    assertReadOnlyEngine("read_slice", engine);
-    return format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine, model: model ?? EXPLORE_MODEL, effort, mode: "ask", agentPrompt: withTerseStyle() }));
+    const { engine, model: auxModel } = resolveAuxTool("read_slice", { engine: engineParam, model });
+    return format("read_slice", await runCursor({ prompt: readSlicePrompt(files, want), cwd, engine, model: auxModel, effort, mode: "ask", agentPrompt: withTerseStyle() }));
   },
 );
 
@@ -269,14 +275,20 @@ server.registerTool(
       "Run a shell command via the Cursor agent and get back ONLY the relevant lines/summary — semantic filtering of huge output (build/test/log). Complements mechanical filters: use when the noise needs judgment to strip. The full output stays on Cursor's side.",
     inputSchema: {
       command: z.string().describe("The exact shell command to run."),
+      engine: z
+        .string()
+        .optional()
+        .describe("Engine override for this call: 'codex' (default), 'grok', 'claude' or 'cursor'. Beats POLYAGENT_RUN_FILTERED_ENGINE. run_filtered accepts any engine."),
       want: z.string().optional().describe("What matters in the output, e.g. 'only failing tests'. Omit for meaningful-signal-only."),
       ...routing,
     },
   },
-  async ({ command, want, cwd, model, effort }) =>
-    // codex sem mode → bypass total: rodar o comando (que pode escrever) É o propósito do tool.
+  async ({ command, want, cwd, model, effort, engine: engineParam }) => {
+    // sem mode → bypass total: rodar o comando (que pode escrever) É o propósito do tool.
     // force mantém a paridade quando o fallback é cursor. O worker filtra o output por relevância.
-    format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, engine: "codex", model: model ?? EXPLORE_MODEL, effort, force: true, agentPrompt: withTerseStyle() })),
+    const { engine, model: auxModel } = resolveAuxTool("run_filtered", { engine: engineParam, model });
+    return format("run_filtered", await runCursor({ prompt: runFilteredPrompt(command, want), cwd, engine, model: auxModel, effort, force: true, agentPrompt: withTerseStyle() }));
+  },
 );
 
 server.registerTool(
@@ -285,14 +297,20 @@ server.registerTool(
     _meta: { "anthropic/alwaysLoad": true },
     description:
       "Delegate a web/documentation lookup to the Cursor agent (which has web access): library docs, API references, error messages, current versions. Cheap way to fetch info newer than your training data.",
-    inputSchema: { query: z.string().describe("What to look up on the web."), ...routing },
+    inputSchema: {
+      query: z.string().describe("What to look up on the web."),
+      engine: z
+        .string()
+        .optional()
+        .describe("Engine override for this call: 'codex' (default), 'grok', 'claude' or 'cursor'. Beats POLYAGENT_WEB_LOOKUP_ENGINE. web_lookup requires web search, which only codex has."),
+      ...routing,
+    },
   },
-  async ({ query, cwd, model, effort }) => {
-    // codex read-only (mode:'ask' → filesystem intocado) + web:true liga a busca web do codex
+  async ({ query, cwd, model, effort, engine: engineParam }) => {
+    // read-only (mode:'ask' → filesystem intocado) + web:true liga a busca web do codex
     // (-c tools.web_search=true). approval_policy=never evita pendurar em headless.
-    const engine: Engine = "codex";
-    assertReadOnlyEngine("web_lookup", engine);
-    return format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine, model: model ?? EXPLORE_MODEL, effort, mode: "ask", web: true, agentPrompt: withTerseStyle() }));
+    const { engine, model: auxModel } = resolveAuxTool("web_lookup", { engine: engineParam, model });
+    return format("web_lookup", await runCursor({ prompt: webLookupPrompt(query), cwd, engine, model: auxModel, effort, mode: "ask", web: true, agentPrompt: withTerseStyle() }));
   },
 );
 

@@ -61,8 +61,8 @@ the **pure logic is testable without spawning a worker process**:
 - `cli.ts` — the only module that touches the child process. `runCursor()` spawns the engine's CLI;
   `buildCursorArgs()`/`buildGrokArgs()`/`buildCodexArgs()`/`buildClaudeArgs()` (+ `buildArgs`
   dispatcher), `resolveModel()`, `parseCliJson()`/`parseCodexJsonl()` (+ `parseOutput` dispatcher),
-  `resolveTier()`, `resolveFastTier()`, `hasEngine()`, `binExists()`, `budgetNote()` are **pure** and
-  unit-tested. Keep the spawn boundary here — do not spawn from elsewhere.
+  `resolveTier()`, `resolveFastTier()`, `resolveAuxTool()`, `hasEngine()`, `binExists()`, `budgetNote()`
+  are **pure** and unit-tested. Keep the spawn boundary here — do not spawn from elsewhere.
 - `agents.ts` — resolves an optional `delegate`/`fast_delegate` persona on the host. A name such as
   `pit:issue-investigator` searches project/home `.claude/agents` and `~/.claude/plugins`; plugin
   collisions pick the newest match by mtime. An inline `{prompt}` skips lookup. Only the markdown
@@ -184,14 +184,15 @@ points, all in `cli.ts`:
 
 ### Key invariants (violating these breaks tools or tests)
 
-- 🔄 [US-004] **Read-only modes are load-bearing for safety.** As três auxiliares deixam de
-  ser fixas no codex (engine por env/parâmetro), e por isso a garantia de read-only fora do codex
-  passa a vir do **sandbox bwrap, já obrigatório** (US-008): no nível do engine `buildGrokArgs` ignora
-  `mode` e emite sempre `--always-approve`, e no claude `mode` emite `--dangerously-skip-permissions`
-  — o oposto de read-only. `assertReadOnlyEngine` já recusa, nomeando o motivo, um engine não-codex
-  com o sandbox desligado; a resolução de engine da US-004 se apoia nesse guard.
-  `explore`, `read_slice`, and `web_lookup` run on
-  codex with `RunOpts.mode`, which `buildCodexArgs` converts to `-s read-only -c
+- **Read-only modes are load-bearing for safety.** As três auxiliares não são mais fixas no codex
+  (engine por env/parâmetro), e por isso a garantia de read-only fora do codex vem do **sandbox
+  bwrap, obrigatório** (US-008): no nível do engine `buildGrokArgs` ignora `mode` e emite sempre
+  `--always-approve`, e no claude `mode` emite `--dangerously-skip-permissions` — o oposto de
+  read-only. Isso está declarado em código na matriz `ENGINE_CAPABILITIES` (`cli.ts`), campo
+  `modeAtEngineLevel`. `assertReadOnlyEngine` recusa, nomeando o motivo, um engine não-codex com o
+  sandbox desligado, e `resolveAuxTool` se apoia nesse guard.
+  `explore`, `read_slice`, and `web_lookup` pass
+  `RunOpts.mode`, which `buildCodexArgs` converts to `-s read-only -c
   approval_policy="never"`; `follow_up` takes the same mode to keep a resumed read-only session
   read-only. `run_filtered` and `delegate` omit mode and get full/bypass access because they execute
   commands or edit. Do not silently remove a read-only tool's mode.
@@ -211,12 +212,17 @@ points, all in `cli.ts`:
   Claude Haiku, Grok 4.5 low; `resolveFastTier` skips missing or unhealthy native engines before the
   opt-in Cursor fallback. Keep it level-free, with the neutral usage receipt
   `{ requestedLevel: 0, matchedRequest: true }`, and do not mark it `alwaysLoad`.
-- 🔄 [US-004] **`explore`/`read_slice`/`run_filtered`/`web_lookup` run on codex at
-  `EXPLORE_MODEL=gpt-5.6-luna`.** O `engine: "codex"` hardcoded sai: cada uma passa a ler
-  `POLYAGENT_<TOOL>_ENGINE`/`_MODEL` e a aceitar um parâmetro `engine` opcional no **próprio
-  inputSchema** — nunca no objeto `routing` compartilhado, que é spread em 10 registrações.
-  Precedência: parâmetro da chamada > env da tool > default de hoje (codex + `gpt-5.6-luna`), que
-  segue valendo sem override.
+- **`explore`/`read_slice`/`run_filtered`/`web_lookup` resolvem engine e modelo por tool, com
+  default codex + `EXPLORE_MODEL=gpt-5.6-luna`.** Não há mais `engine: "codex"` hardcoded no
+  handler: cada uma lê `POLYAGENT_<TOOL>_ENGINE`/`_MODEL` e aceita um parâmetro `engine` opcional no
+  **próprio inputSchema** — nunca no objeto `routing` compartilhado, que é spread em 10 registrações
+  e daria `engine` também a `delegate`/`fan_out`/`follow_up`. A resolução é a função pura
+  `resolveAuxTool(tool, params, env, sandboxOn)` em `cli.ts`; precedência: parâmetro da chamada >
+  env da tool > default. Ela recusa, nomeando o motivo, um engine que não atenda o requisito
+  declarado em `AUX_TOOL_REQUIREMENTS` — read-only para as três de leitura, web search (só codex)
+  para `web_lookup` — e nunca degrada para acesso total em silêncio; `run_filtered` aceita qualquer
+  engine porque roda com `force: true` por desenho. Com engine não-codex e nenhum modelo definido, o
+  modelo fica `undefined` de propósito: `gpt-5.6-luna` é id de codex e quebraria em grok/claude.
   An explicit `model` still wins. `explore` and `read_slice` pass a
   mode for `-s read-only`; `web_lookup` also sets `RunOpts.web`, which adds
   `-c tools.web_search=true` for real web search; `run_filtered` deliberately omits mode and uses

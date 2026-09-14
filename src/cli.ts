@@ -82,7 +82,8 @@ export const DEFAULT_MODEL = process.env.POLYAGENT_MODEL ?? "composer-2.5-fast";
  * cursor cancelado — localizar/ler/filtrar pede o modelo mais barato e ágil. Override via
  * POLYAGENT_EXPLORE_MODEL. Só se aplica quando o chamador não passa `model`.
  */
-export const EXPLORE_MODEL = process.env.POLYAGENT_EXPLORE_MODEL ?? "gpt-5.6-luna";
+const EXPLORE_MODEL_FALLBACK = "gpt-5.6-luna";
+export const EXPLORE_MODEL = process.env.POLYAGENT_EXPLORE_MODEL ?? EXPLORE_MODEL_FALLBACK;
 
 /**
  * Modelo codex que dispara o image_gen built-in (gpt-image-2 faz o trabalho pesado; effort baixo basta).
@@ -285,6 +286,118 @@ export function assertReadOnlyEngine(tool: string, engine: Engine, sandboxOn = S
     `${tool} é read-only e o sandbox está desligado (POLYAGENT_SANDBOX=off): engine '${engine}' recusado. ` +
     "Sem bwrap, só o codex garante read-only próprio (-s read-only) — use engine 'codex' ou religue o sandbox.",
   );
+}
+
+/** As quatro tools auxiliares, que resolvem engine/modelo próprios (as demais vão pelo tier). */
+export type AuxTool = "explore" | "read_slice" | "run_filtered" | "web_lookup";
+
+/** O que cada engine garante no nível do CLI — base das recusas por capacidade. */
+export interface EngineCapability {
+  /** Busca web nativa. Só o codex lê RunOpts.web (-c tools.web_search=true); os outros ignoram o campo. */
+  webSearch: boolean;
+  /** Read-only próprio do engine, independente do sandbox. Só o codex (-s read-only). */
+  engineReadOnly: boolean;
+  /** Read-only via bwrap: buildSandboxSpec(workspace, engine, !!mode) monta o workspace --ro-bind. Vale para todos. */
+  sandboxReadOnly: boolean;
+  /** O que o engine faz com RunOpts.mode no nível do CLI — documenta por que o read-only depende do sandbox. */
+  modeAtEngineLevel: string;
+}
+
+/**
+ * Matriz de capacidade por engine. O ponto não-óbvio que ela registra: fora do codex, `mode` NÃO
+ * significa read-only no nível do engine — buildGrokArgs ignora `mode` e emite sempre
+ * `--always-approve`, e buildClaudeArgs emite `--dangerously-skip-permissions`, o oposto de
+ * read-only. Por isso o read-only dessas tools fora do codex depende do sandbox bwrap (obrigatório
+ * desde a US-008) e assertReadOnlyEngine recusa não-codex com o sandbox desligado.
+ */
+export const ENGINE_CAPABILITIES: Record<Engine, EngineCapability> = {
+  codex: {
+    webSearch: true,
+    engineReadOnly: true,
+    sandboxReadOnly: true,
+    modeAtEngineLevel: '-s read-only -c approval_policy="never" (buildCodexArgs, fora do bwrap)',
+  },
+  grok: {
+    webSearch: false,
+    engineReadOnly: false,
+    sandboxReadOnly: true,
+    modeAtEngineLevel: "mode ignorado — sempre --always-approve (buildGrokArgs)",
+  },
+  claude: {
+    webSearch: false,
+    engineReadOnly: false,
+    sandboxReadOnly: true,
+    modeAtEngineLevel: "mode emite --dangerously-skip-permissions (buildClaudeArgs)",
+  },
+  cursor: {
+    webSearch: false,
+    engineReadOnly: false,
+    sandboxReadOnly: true,
+    modeAtEngineLevel: "mode vira --mode <mode> (buildCursorArgs), sem garantia de read-only",
+  },
+};
+
+/** O que cada tool auxiliar exige do engine. run_filtered não exige nada: roda com force por desenho. */
+export const AUX_TOOL_REQUIREMENTS: Record<AuxTool, { readOnly: boolean; webSearch: boolean }> = {
+  explore: { readOnly: true, webSearch: false },
+  read_slice: { readOnly: true, webSearch: false },
+  run_filtered: { readOnly: false, webSearch: false },
+  web_lookup: { readOnly: true, webSearch: true },
+};
+
+/** Prefixo do par de env de cada tool: <prefixo>_ENGINE e <prefixo>_MODEL. */
+export const AUX_TOOL_ENV: Record<AuxTool, string> = {
+  explore: "POLYAGENT_EXPLORE",
+  read_slice: "POLYAGENT_READ_SLICE",
+  run_filtered: "POLYAGENT_RUN_FILTERED",
+  web_lookup: "POLYAGENT_WEB_LOOKUP",
+};
+
+const ENGINES = Object.keys(ENGINE_CAPABILITIES) as Engine[];
+
+function parseEngine(raw: string, source: string): Engine {
+  if ((ENGINES as string[]).includes(raw)) return raw as Engine;
+  throw new Error(
+    `engine inválida '${raw}' (${source}): use uma de ${ENGINES.join(", ")}.`,
+  );
+}
+
+/**
+ * Resolve (engine, modelo) de uma tool auxiliar. Precedência: parâmetro da chamada > env própria da
+ * tool (POLYAGENT_<TOOL>_ENGINE/_MODEL) > default de hoje (codex + POLYAGENT_EXPLORE_MODEL, que
+ * segue sendo o modelo barato de leitura das quatro). Com engine não-codex e sem modelo explícito
+ * devolve `undefined`: o modelo default é um id de codex, mandá-lo para grok/claude falharia —
+ * melhor deixar o CLI usar o próprio default.
+ *
+ * Recusa, nomeando o motivo, engine que não atenda o requisito da tool (read-only, web search).
+ * Função pura: `env` e `sandboxOn` são injetados para teste.
+ */
+export function resolveAuxTool(
+  tool: AuxTool,
+  params: { engine?: string; model?: string } = {},
+  env: NodeJS.ProcessEnv = process.env,
+  sandboxOn = SANDBOX_ON,
+): { engine: Engine; model: string | undefined } {
+  const prefix = AUX_TOOL_ENV[tool];
+  const engine = params.engine
+    ? parseEngine(params.engine, `parâmetro engine de ${tool}`)
+    : env[`${prefix}_ENGINE`]
+      ? parseEngine(env[`${prefix}_ENGINE`] as string, `${prefix}_ENGINE`)
+      : "codex";
+
+  const req = AUX_TOOL_REQUIREMENTS[tool];
+  if (req.readOnly) assertReadOnlyEngine(tool, engine, sandboxOn);
+  if (req.webSearch && !ENGINE_CAPABILITIES[engine].webSearch) {
+    throw new Error(
+      `${tool} exige web search e a engine '${engine}' não tem: só o codex lê o campo web ` +
+      "(-c tools.web_search=true); as demais o ignoram silenciosamente. Use engine 'codex'.",
+    );
+  }
+
+  const defaultModel = engine === "codex"
+    ? env.POLYAGENT_EXPLORE_MODEL ?? EXPLORE_MODEL_FALLBACK
+    : undefined;
+  return { engine, model: params.model ?? env[`${prefix}_MODEL`] ?? defaultModel };
 }
 
 /** Cria os dirs efêmeros e sonda os paths existentes pra montar o SandboxSpec. */

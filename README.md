@@ -90,7 +90,9 @@ have their own approval settings — consult the host.
 | `POLYAGENT_CLAUDE_BIN` | `claude` | Path to the Claude Code CLI. |
 | `POLYAGENT_ENABLE_CURSOR` | _(off)_ | Set to `1`/`true` to allow Cursor fallback when a tier's preferred CLI is missing. Otherwise the call fails with the missing CLI named. |
 | `POLYAGENT_MODEL` | `composer-2.5-fast` | Default model for the optional Cursor path. |
-| `POLYAGENT_EXPLORE_MODEL` | `gpt-5.6-luna` | Codex model for `explore`, `read_slice`, `run_filtered`, and `web_lookup` when the call omits `model`. |
+| `POLYAGENT_EXPLORE_MODEL` | `gpt-5.6-luna` | Codex model for `explore`, `read_slice`, `run_filtered`, and `web_lookup` when neither the call nor the tool-specific `_MODEL` sets one. |
+| `POLYAGENT_<TOOL>_ENGINE` | `codex` | Per-tool engine for the four auxiliary tools — `<TOOL>` is `EXPLORE`, `READ_SLICE`, `RUN_FILTERED`, or `WEB_LOOKUP`. The call's own `engine` parameter beats it. Refused when the engine lacks what the tool needs: read-only (`explore`/`read_slice`/`web_lookup`, which outside codex comes from the sandbox) or web search (`web_lookup`, codex only). |
+| `POLYAGENT_<TOOL>_MODEL` | _(see above)_ | Per-tool model, same four names. The call's `model` beats it. With a non-codex engine and no model set anywhere, the engine's own default model is used. |
 | `POLYAGENT_AGENT_PATHS` | _(off)_ | Additional `:`-separated roots for named agent personas, searched before project/home `.claude/agents` and `~/.claude/plugins`. |
 | `POLYAGENT_SANDBOX` | `bwrap` | Isolates every engine in a bubblewrap sandbox with an empty `$HOME`, preventing global config, MCP servers, hooks, and skills from loading. Only auth, required engine state, and toolchains are bound in. Set `off`/`0` to disable explicitly — with the sandbox off, the read-only tools (`explore`, `read_slice`, `web_lookup`) accept only the codex engine. A missing `bwrap` is a startup error, never a silent downgrade. |
 | `POLYAGENT_FORCE` | _(off)_ | If `1`/`true`, force-enable non-interactive approval for Cursor and Claude runs. |
