@@ -22,6 +22,24 @@ export function isCodexEnvError(stderr: string): boolean {
     || stderr.includes("Read-only file system");
 }
 
+/**
+ * Falha de processo do CLI com os três canais preservados separados. `message` é idêntica à de
+ * antes (quem só lê `error.message` não vê diferença), mas o JSON estruturado que os CLIs emitem em
+ * stdout deixa de ser descartado sempre que o stderr tem qualquer conteúdo — é ele que permite
+ * classificar a causa (cota, rate limit, auth) a jusante.
+ */
+export class ProcessError extends Error {
+  constructor(
+    message: string,
+    readonly stdout: string,
+    readonly stderr: string,
+    readonly exitCode: number | null,
+  ) {
+    super(message);
+    this.name = "ProcessError";
+  }
+}
+
 /** Formata um id de sessão com o engine que deve retomá-lo. */
 export function formatSessionHandle(engine: Engine, id: string): string {
   return `${engine}:${id}`;
@@ -723,7 +741,12 @@ export function runCursor(opts: RunOpts): Promise<CliResult> {
         clearTimeout(timer);
         cleanup();
         if (code !== 0) {
-          reject(new Error(`${engine} agent exited ${code}: ${stderr.trim() || stdout.trim()}`));
+          reject(new ProcessError(
+            `${engine} agent exited ${code}: ${stderr.trim() || stdout.trim()}`,
+            stdout,
+            stderr,
+            code,
+          ));
           return;
         }
         resolve({ ...parseOutput(engine, stdout), engine });

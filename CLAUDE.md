@@ -247,10 +247,12 @@ points, all in `cli.ts`:
 - **`parseCliJson` degrades gracefully**: non-JSON stdout falls back to raw text; `usage.ts`
   skips malformed JSONL lines. Match this best-effort posture — logging/parsing must never throw
   up into a tool call.
-  🔄 [US-005] O erro de processo lançado por `runOnce` deixa de colapsar em
-  `stderr.trim() || stdout.trim()` e passa a carregar `{stdout, stderr, exitCode}` separados — o JSON
-  estruturado dos CLIs sai em **stdout** e hoje se perde sempre que `stderr` tem qualquer conteúdo.
-  `error.message` não regride (mesmo texto de antes) e `isCodexEnvError` continua lendo `stderr`.
+  O erro de saída não-zero de `runOnce` é uma `ProcessError` (exportada de `cli.ts`) que carrega
+  `{stdout, stderr, exitCode}` separados — o JSON estruturado dos CLIs sai em **stdout** e se perdia
+  sempre que `stderr` tinha qualquer conteúdo. `error.message` segue idêntica
+  (`<engine> agent exited <code>: <stderr||stdout>`) e o fallback de engine continua decidindo pelo
+  `isCodexEnvError` sobre a message/stderr. Não colapse os canais de volta: a classificação de causa
+  (cota, rate limit, auth) depende do stdout preservado.
 - **Core tools are `alwaysLoad`.** The five core tools (`delegate`, `explore`, `read_slice`,
   `run_filtered`, `web_lookup`) register with `_meta: { "anthropic/alwaysLoad": true }` so Claude
   Code (≥2.1.121) eagerly loads their schemas instead of deferring them. Deferred tools lose to
