@@ -173,8 +173,8 @@
       ],
       "jiraKey": null,
       "repo": null,
-      "passes": false,
-      "notes": "Fonte: prd-update-1.html (tier update, herda full). Spike: spikes/quota-patterns.md (ver ADENDO)."
+      "passes": true,
+      "notes": "Fonte: prd-update-1.html (tier update, herda full). Spike: spikes/quota-patterns.md (ver ADENDO). Commits cf1dbec + d2b3ea2. GATE 6 depth-loop PASS."
     },
     {
       "id": "US-007",
